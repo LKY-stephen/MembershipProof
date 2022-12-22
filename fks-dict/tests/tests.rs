@@ -22,6 +22,7 @@ mod tests {
             println!("Start Querying");
             for x in 1..=max {
                 assert_eq!(dict.query(x), set.contains(&x));
+                assert_eq!(dict.verify(x, &dict.do_query(x)).unwrap(), set.contains(&x));
             }
         }
     }
@@ -42,13 +43,10 @@ mod tests {
         for x in 1..=max {
             let commit = dict.commit(&refer);
             let proof = dict.gen_proof(x, &refer);
-            assert!(fks_dict::verify_commit_proof(
-                x,
-                &refer,
-                &proof,
-                &commit,
+            assert_eq!(
+                fks_dict::verify_commit_proof(x, &refer, &proof, &commit).unwrap(),
                 set.contains(&x)
-            ));
+            );
         }
     }
 

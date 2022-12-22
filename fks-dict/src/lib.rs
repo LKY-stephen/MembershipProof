@@ -101,61 +101,87 @@ impl FKSDict {
 
     // Query if an element is stored in the dictionary
     pub fn query(&self, x: u32) -> bool {
-        !self.do_query(x).ends_with(&[0])
+        self.do_query(x).ends_with(&[x])
     }
 
     // verify if an membership apply to the dictionary
-    // return true if it is an valid proof(both member or non-member)
-    pub fn verify(&self, x: u32, query: &[u32]) -> bool {
-        if query[0] != self.store[0]
-            || query[1] != self.p
-            || query[2] != self.a
-            || query[3] != self.store[1 + perfect_hash(x, query[0], query[1], query[2]) as usize]
+    // return err if the query is incorrect
+    // return ok(bool for results)
+    pub fn verify(&self, x: u32, query: &[u32]) -> Result<bool, ()> {
+        if query[2] != self.store[0]
+            || query[0] != self.p
+            || query[1] != self.a
+            || query[3] != self.store[1 + perfect_hash(x, query[2], query[0], query[1]) as usize]
         {
-            return false;
+            return Err(());
         }
 
-        if query[3] == 0 && query.len() == 4 {
-            return true;
+        if query[3] == 0 {
+            if query.len() == 4 {
+                return Ok(false);
+            }
         }
 
         if query[4] != self.store[query[3] as usize]
             || query[5] != self.store[1 + query[3] as usize]
             || query[6]
-                != self.store[(2 + query[3] + perfect_hash(x, query[4], self.p, query[5])) as usize]
+                != self.store
+                    [(2 + query[3] + perfect_hash(x, query[5], query[0], query[4])) as usize]
         {
-            return false;
+            return Err(());
         }
 
-        return true;
+        return Ok(query[6] == x);
+
+        // non exist memproof
     }
 
+    // build merkle tree from ref, q, a, store.
     pub fn commit(&self, refer: &Vec<u32>) -> [u8; 32] {
         return self.build_tree(refer).root().unwrap();
     }
 
-    pub fn gen_proof(&self, x: u32, refer: &Vec<u32>) -> (MerkleProof<Sha256>, Vec<u32>) {
+    // generate a merkle tree proof for refer and query result
+    pub fn gen_proof(&self, x: u32, refer: &Vec<u32>) -> (Vec<u8>, Vec<u32>) {
         let mut query = self.do_query(x);
         let tree = self.build_tree(refer);
+        let r = refer.len();
+        let index: Vec<usize> = query_proof_index(r as u32, x, &query);
 
-        let index = query_proof_indice(refer.len() as u32, x, &query);
-        // proof refer, a, p, k for layer 1
+        query.push((self.store.len() + r + 2) as u32);
 
-        let mut leaves = refer.to_owned();
-        leaves.push(self.a);
-        leaves.push(self.p);
-        leaves.append(&mut query);
-        leaves.push((self.store.len() + refer.len() + 2) as u32);
-
-        (tree.proof(&index), leaves)
+        (tree.proof(&index).to_bytes(), query)
     }
 
+    // Generate a constant size query for (non)-membership
+    // p, a, k, w, r, k2, v
+    pub fn do_query(&self, x: u32) -> Vec<u32> {
+        let h1 = perfect_hash(x, self.store[0], self.p, self.a) + 1;
+        let w = self.store[h1 as usize];
+        if w == 0 {
+            return vec![self.p, self.a, self.store[0], 0];
+        };
+        let k2: u32 = self.store[1 + w as usize];
+        let r: u32 = self.store[w as usize];
+
+        let y = perfect_hash(x, k2, self.p, r);
+
+        return vec![
+            self.p,
+            self.a,
+            self.store[0],
+            w,
+            r,
+            k2,
+            self.store[(2 + w + y) as usize],
+        ];
+    }
+
+    // tree from refer, p, a, store
     fn build_tree(&self, refer: &Vec<u32>) -> MerkleTree<Sha256> {
-        let mut dataset: Vec<u32> = Vec::new();
-        let mut copy = refer.to_owned();
-        dataset.append(&mut copy);
-        dataset.push(self.a);
+        let mut dataset = refer.to_owned();
         dataset.push(self.p);
+        dataset.push(self.a);
         dataset.append(&mut self.store.to_owned());
         let leaves: Vec<[u8; 32]> = dataset
             .iter()
@@ -164,56 +190,62 @@ impl FKSDict {
 
         MerkleTree::from_leaves(&leaves)
     }
-
-    // Generate a constant size proof for (non)-membership
-    pub fn do_query(&self, x: u32) -> Vec<u32> {
-        let h1 = perfect_hash(x, self.store[0], self.p, self.a) + 1;
-        let w = self.store[h1 as usize];
-        if w == 0 {
-            return vec![self.store[0], self.p, self.a, 0];
-        };
-        let k2: u32 = self.store[1 + w as usize];
-        let r: u32 = self.store[w as usize];
-
-        let y = perfect_hash(x, k2, self.p, r);
-        if self.store[(2 + w + y) as usize] != x {
-            return vec![self.store[0], self.p, self.a, w, r, k2, 0];
-        }
-        return vec![self.store[0], self.p, self.a, w, r, k2, x];
-    }
 }
 
+// Verify if a proof is correct or not
+// 1. check if proof is well formed
+// 2. check if proof is correct for refer and commit
+// 3. check if the hash in proof is correctly calculated for x
+// 4. return the query result of the proof
 pub fn verify_commit_proof(
     x: u32,
     refer: &Vec<u32>,
-    proof: &(MerkleProof<Sha256>, Vec<u32>),
+    proof: &(Vec<u8>, Vec<u32>),
     commit: &[u8; 32],
-    membership: bool,
-) -> bool {
+) -> Result<bool, &'static str> {
     let n = proof.1.len();
 
-    // 1. Proof satisfy the query requirement
-    if (x == proof.1[n - 2]) != membership {
-        return false;
-    }
-
     let r = refer.len();
-    if *refer != proof.1[0..r] {
-        return false;
-    }
 
-    let leaves: Vec<[u8; 32]> = proof.1[0..n - 1]
+    // <refer>, p,a,k,w,r,k2,v
+    let mut query = proof.1[0..n - 1].to_owned();
+    let mut leaves = refer.to_owned();
+    leaves.append(&mut query);
+
+    let leaves_hash: Vec<[u8; 32]> = leaves
         .iter()
         .map(|x| Sha256::hash(x.to_string().as_bytes()))
         .collect();
-    let index = query_proof_indice(refer.len() as u32, x, &proof.1[r + 2..n - 1].to_vec());
-    if proof
-        .0
-        .verify(commit.to_owned(), index.as_slice(), leaves.as_slice(), n)
-    {
-        return false;
+    let index = query_proof_index(r as u32, x, &proof.1[0..n - 1].to_vec());
+
+    let merkle_proof = MerkleProof::<Sha256>::try_from(proof.0.to_owned());
+
+    if merkle_proof.is_err() {
+        return Err("Incorrect merkle proof");
     }
-    return true;
+
+    if !merkle_proof.unwrap().verify(
+        commit.to_owned(),
+        index.as_slice(),
+        leaves_hash.as_slice(),
+        proof.1[n - 1] as usize,
+    ) {
+        return Err("merkle tree verification failed");
+    }
+
+    if index[r + 3] != r + 3 + perfect_hash(x, proof.1[2], proof.1[0], proof.1[1]) as usize {
+        return Err("first layer hash is incorrect");
+    }
+
+    if n == r + 6
+        && index[r + 6]
+            != r + 4
+                + proof.1[3] as usize
+                + perfect_hash(x, proof.1[5], proof.1[0], proof.1[4]) as usize
+    {
+        return Err("second layer hash is incorrect");
+    }
+    return Ok(proof.1[n - 2] == x);
 }
 
 fn compute_collision(input: &HashSet<u32>, k: u32, p: u32, a: u32) -> Vec<HashSet<u32>> {
@@ -229,22 +261,28 @@ fn perfect_hash(x: u32, k: u32, p: u32, a: u32) -> u32 {
     return y % a;
 }
 
-fn query_proof_indice(referlen: u32, x: u32, query: &Vec<u32>) -> Vec<usize> {
+// index of reference, p, a, k, w, r, k2, v in leaves
+fn query_proof_index(referlen: u32, x: u32, query: &Vec<u32>) -> Vec<usize> {
+    // start point of store
+
     let starter = referlen + 2;
 
-    // proof refer, a, p, k for layer 1
-    let mut index = vec![starter + 1];
-    // prove first store[h1(x)] =  1
+    // index for refer
+    let mut index: Vec<u32> = (0..referlen).collect();
 
-    index.push(starter + perfect_hash(x, query[0], query[1], query[2]));
+    // index for k, p, a
+    index.append(&mut vec![referlen, referlen + 1, starter]);
+
+    // prove first store[h1(x)] =  1
+    index.push(starter + 1 + perfect_hash(x, query[2], query[0], query[1]));
 
     if query.len() == 7 {
         // prove second layer parameters
         index.push(starter + query[3]);
         index.push(starter + 1 + query[3]);
 
-        // prove possible second layer parameter
-        index.push(2 + query[3] + perfect_hash(x, query[4], query[1], query[5]));
+        // index of query[6]
+        index.push(starter + 2 + query[3] + perfect_hash(x, query[5], query[0], query[4]));
     }
 
     return index.into_iter().map(|x| x as usize).collect();

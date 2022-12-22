@@ -58,7 +58,7 @@ pub fn criterion_verify_non_exist(c: &mut Criterion) {
         let prove = dict.gen_proof(ele, &reference);
         let commit = dict.commit(&reference);
         c.bench_function(&format!("verify non exists {}", num), |b| {
-            b.iter(|| fks_dict::verify_commit_proof(ele, &reference, &prove, &commit, false));
+            b.iter(|| fks_dict::verify_commit_proof(ele, &reference, &prove, &commit));
         });
     }
 }
@@ -72,7 +72,7 @@ pub fn criterion_verify_exist(c: &mut Criterion) {
         let prove = dict.gen_proof(ele, &reference);
         let commit = dict.commit(&reference);
         c.bench_function(&format!("verify exists {}", num), |b| {
-            b.iter(|| fks_dict::verify_commit_proof(ele, &reference, &prove, &commit, true));
+            b.iter(|| fks_dict::verify_commit_proof(ele, &reference, &prove, &commit));
         });
     }
 }
