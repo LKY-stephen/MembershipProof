@@ -46,7 +46,7 @@ mod tests {
                 x,
                 &refer,
                 &proof,
-                commit,
+                &commit,
                 set.contains(&x)
             ));
         }
