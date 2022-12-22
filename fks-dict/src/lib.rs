@@ -187,7 +187,7 @@ pub fn verify_commit_proof(
     x: u32,
     refer: &Vec<u32>,
     proof: &(MerkleProof<Sha256>, Vec<u32>),
-    commit: [u8; 32],
+    commit: &[u8; 32],
     membership: bool,
 ) -> bool {
     let n = proof.1.len();
@@ -209,7 +209,7 @@ pub fn verify_commit_proof(
     let index = query_proof_indice(refer.len() as u32, x, &proof.1[r + 2..n - 1].to_vec());
     if proof
         .0
-        .verify(commit, index.as_slice(), leaves.as_slice(), n)
+        .verify(commit.to_owned(), index.as_slice(), leaves.as_slice(), n)
     {
         return false;
     }
