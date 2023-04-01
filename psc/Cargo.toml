@@ -1,0 +1,24 @@
+[package]
+name = "psc"
+version = "0.1.0"
+edition = "2021"
+license = "MIT/Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+halo2_gadgets="0.3.0"
+halo2_proofs="0.3.0"
+rstest = "0.16.0"
+bitvec = "1.0.1"
+ff = "0.13"
+highway = "1.0.0"
+rayon = "1.7"
+murmurhash3  = "0.0.5"
+rand="0.8.5"
+[dev-dependencies]
+light-poseidon = "0.0.3"
+rand_core = "0.6.4"
+rand = "0.8.5"
+criterion = "0.3"
