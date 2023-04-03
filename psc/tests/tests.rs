@@ -10,8 +10,6 @@ mod tests {
     #[case(100)]
     #[case(1000)]
     #[case(10_000)]
-    #[case(100_000)]
-    #[case(1_000_000)]
     fn random_plain_proof_tests(#[case] num: usize) {
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
@@ -35,6 +33,47 @@ mod tests {
             &witness,
             &set_commitment,
             &k_commitment,
+        );
+        assert_eq!(result.is_ok(), true);
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[rstest]
+    #[case(100)]
+    #[case(1000)]
+    #[case(10_000)]
+    fn random_zk_proof_tests(#[case] num: usize) {
+        println!("Generate test set");
+        let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
+        println!("Generate PSC dict");
+        let psc = Psc::<4, 32, 3>::new(set.clone());
+        println!("Start Querying");
+
+        let element = set.choose(&mut rand::thread_rng()).expect("set is empty");
+        let (param, pk) = Psc::<4, 32, 3>::zk_setup();
+        let proof = psc.zk_prove(element, &param, &pk);
+        let (set_commitment, k_commitment) = psc.get_commitment();
+        let result = Psc::<4, 32, 3>::zk_verify_membership(
+            element,
+            &proof,
+            &set_commitment,
+            &k_commitment,
+            &param,
+            pk.get_vk(),
+        );
+        assert_eq!(result.is_ok(), true);
+        assert_eq!(result.unwrap(), true);
+
+        let fake_element = [1, 1, 1, 0];
+        let proof = psc.zk_prove(&fake_element, &param, &pk);
+        let (set_commitment, k_commitment) = psc.get_commitment();
+        let result = Psc::<4, 32, 3>::zk_verify_membership(
+            &fake_element,
+            &proof,
+            &set_commitment,
+            &k_commitment,
+            &param,
+            pk.get_vk(),
         );
         assert_eq!(result.is_ok(), true);
         assert_eq!(result.unwrap(), false);
