@@ -14,7 +14,7 @@ mod tests {
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
         println!("Generate PSC dict");
-        let psc = Psc::<4, 32, 3>::new(set.clone());
+        let psc = Psc::<4, 32, 3>::new(&set);
         println!("Start Querying");
 
         let element = set.choose(&mut rand::thread_rng()).expect("set is empty");
@@ -46,7 +46,7 @@ mod tests {
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
         println!("Generate PSC dict");
-        let psc = Psc::<4, 32, 3>::new(set.clone());
+        let psc = Psc::<4, 32, 3>::new(&set);
         println!("Start Querying");
 
         let element = set.choose(&mut rand::thread_rng()).expect("set is empty");

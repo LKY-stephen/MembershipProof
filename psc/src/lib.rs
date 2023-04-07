@@ -45,6 +45,11 @@ pub struct ZKProof {
     proof: Vec<u8>,
 }
 
+impl ZKProof {
+    pub fn len(&self) -> usize {
+        4 + (self.k.len() + 1) * 8 + self.proof.len()
+    }
+}
 pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
     type Element;
 
@@ -77,11 +82,11 @@ pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
 }
 
 impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
-    const BUCKET_SIZE: usize = 1 << LB;
+    const BUCKET_SIZE: usize = 1 << LB as u32;
     const MAX_TREE_DEPTH: usize = LM - LB;
-    const MAX_SET_SIZE: usize = 1 << LM;
+    const MAX_SET_SIZE: usize = 1 << LM as u32;
 
-    pub fn new(set: Vec<[u64; LE]>) -> Self {
+    pub fn new(set: &Vec<[u64; LE]>) -> Self {
         let set_size = set.len();
 
         if set_size > Self::MAX_SET_SIZE {
@@ -90,13 +95,17 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
 
         let keys: Vec<[u64; LE]> = set
             .into_iter()
-            .map(|x| x.try_into().expect("slice with incorrect length"))
+            .map(|x| {
+                x.to_owned()
+                    .try_into()
+                    .expect("slice with incorrect length")
+            })
             .collect();
 
         // initate the vec k.
         let mut buckets = Buckets::new(keys);
 
-        println!("Start spliting");
+        // println!("Start spliting");
         buckets.split(set_size, Self::BUCKET_SIZE);
 
         // fill the rest of k with 0
@@ -117,7 +126,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
 
         // initialize the leave array and covert each leaf to a Fp node;
 
-        println!("Start maping for buckets");
+        // println!("Start maping for buckets");
         let mut aux = vec![buckets.init_aux(Self::BUCKET_SIZE)];
         let raw_leaves = aux.first().expect("empty leaves");
         aux.push(raw_leaves.iter().map(poseidonhash_node).collect());
@@ -137,7 +146,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
         }
 
         // get the root
-        println!("Start commiting for buckets");
+        // println!("Start commiting for buckets");
         if let Node::Field(root) = aux.last().unwrap()[0] {
             let set_commitment = root.to_repr();
 
@@ -418,8 +427,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
             return Err("k_commitment is not correct".to_string());
         }
 
-        let mut public =
-            vec![Fp::from_repr(set_commitment.to_owned()).expect("Invalid set_commitment")];
+        let mut public = vec![Fp::from_repr(set_commitment.to_owned()).unwrap()];
 
         for k in witness.k.iter() {
             public.push(match highwayhash_64(*k, &element) & 1 {
