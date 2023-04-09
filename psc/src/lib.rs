@@ -1,11 +1,10 @@
 mod buckets;
-mod chip;
-mod circuit;
+mod halo_circuit;
 mod hashes;
 mod poseidon_spec;
 use crate::buckets::Buckets;
 use crate::buckets::Node;
-use crate::circuit::MerkleExtendedPathCircuit;
+use crate::halo_circuit::circuit::MerkleExtendedPathCircuit;
 use crate::hashes::*;
 use crate::poseidon_spec::PoseidonSpec;
 use ff::Field;
@@ -62,14 +61,14 @@ pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
         k_commitment: &[u64; 4],
     ) -> Result<bool, String>;
 
-    fn zk_prove(
+    fn zk_prove_halo(
         &self,
         element: &[u64; LE],
         param: &Params<EqAffine>,
         pk: &ProvingKey<EqAffine>,
     ) -> ZKProof;
 
-    fn zk_verify_membership(
+    fn zk_verify_halo(
         element: &[u64; LE],
         witness: &ZKProof,
         set_commitment: &[u8; 32],
@@ -216,7 +215,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
         }
     }
 
-    fn zk_prove(
+    fn zk_prove_halo(
         &self,
         element: &[u64; LE],
         param: &Params<EqAffine>,
@@ -413,7 +412,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
         Ok(membership)
     }
 
-    fn zk_verify_membership(
+    fn zk_verify_halo(
         element: &[u64; LE],
         witness: &ZKProof,
         set_commitment: &[u8; 32],
