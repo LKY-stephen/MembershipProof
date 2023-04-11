@@ -83,12 +83,9 @@ pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
 impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
     const BUCKET_SIZE: usize = 1 << LB as u32;
     const MAX_TREE_DEPTH: usize = LM - LB;
-    const MAX_SET_SIZE: usize = 1 << LM as u32;
 
     pub fn new(set: &Vec<[u64; LE]>) -> Self {
-        let set_size = set.len();
-
-        if set_size > Self::MAX_SET_SIZE {
+        if (set.len() as f64).log2().round() as usize + 1 > LM {
             panic!("The size of the set is too large");
         }
 
@@ -105,7 +102,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
         let mut buckets = Buckets::new(keys);
 
         // println!("Start spliting");
-        buckets.split(set_size, Self::BUCKET_SIZE);
+        buckets.split(set.len(), Self::BUCKET_SIZE);
 
         // fill the rest of k with 0
         // technically, here we should use a more random value here
@@ -316,9 +313,11 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
 
         assert_eq![public.len(), LM + 2];
 
+        #[cfg(debug_assertions)]
         {
             use halo2_proofs::dev::MockProver;
-            let prover = MockProver::run(15, &prover_circuit, vec![public.clone()]).unwrap();
+            // over kill k just for test purpose
+            let prover = MockProver::run(20, &prover_circuit, vec![public.clone()]).unwrap();
             prover.assert_satisfied();
         }
 
@@ -479,17 +478,24 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
         const W: usize = 3;
         const R: usize = W - 1;
 
-        let log_m = (LM as f64).log2().ceil() as u32;
-
-        let params: Params<EqAffine> = Params::new(log_m + POSEIDON_DEGREE);
         let empty_circuit = MerkleExtendedPathCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
             vec![vec![Value::unknown(); 1]; LM],
             vec![vec![Value::unknown(); 1]; LM],
             vec![Value::unknown(); LM],
         );
 
-        let vk = keygen_vk(&params, &empty_circuit).expect("keygen_vk should not fail");
-        let pk = keygen_pk(&params, vk, &empty_circuit).expect("keygen_pk should not fail");
-        return (params, pk);
+        // search for the best k
+        let mut k = POSEIDON_DEGREE + LB as u32 + 1;
+        let (param, vk) = loop {
+            let param = Params::new(k);
+            let result = keygen_vk(&param, &empty_circuit);
+            if result.is_ok() {
+                break (param, result.expect("keygen_vk should not fail"));
+            }
+            k += 1;
+        };
+
+        let pk = keygen_pk(&param, vk, &empty_circuit).expect("keygen_pk should not fail");
+        return (param, pk);
     }
 }
