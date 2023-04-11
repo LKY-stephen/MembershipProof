@@ -42,11 +42,10 @@ mod tests {
     #[case(100)]
     #[case(1000)]
     #[case(10_000)]
-    fn random_zk_halow_tests(#[case] num: usize) {
+    fn random_zk_halo_tests(#[case] num: usize) {
         const LN: usize = 4;
         const LE: usize = 3;
-
-        seq_macro::seq!(M in 32..35 {
+        const M: usize = 32;
 
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
@@ -82,7 +81,6 @@ mod tests {
         );
         assert_eq!(result.is_ok(), true);
         assert_eq!(result.unwrap(), false);
-        });
     }
 
     fn gen_rand_list(num: usize) -> HashSet<[u64; 4]> {

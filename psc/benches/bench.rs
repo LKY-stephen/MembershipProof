@@ -3,28 +3,44 @@ use criterion::{
 };
 
 use psc::{Psc, SetCommitment};
-use rand::{seq::SliceRandom, Rng};
+use rand::seq::SliceRandom;
 
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
-const LN: usize = 4;
 const LB: usize = 3;
 
 fn bench_with_m(c: &mut Criterion) {
-    let set = gen_rand_list(10);
+    const LN: usize = 4;
+    let set = gen_rand_list::<LN>(10);
     let mut group = c.benchmark_group("with_changed_m");
-    seq_macro::seq!(M in 32..64 {
-        bench_halo::<M,_>(&set, &mut group,|s: &str| BenchmarkId::new(&format!("{s} for n: 10 ", ), M));
-    });
 
+    bench_halo::<LN, 12, _>(&set, &mut group, |s: &str| {
+        BenchmarkId::new(&format!("{s} for n: 10 ",), 12)
+    });
+    bench_halo::<LN, 16, _>(&set, &mut group, |s: &str| {
+        BenchmarkId::new(&format!("{s} for n: 10 ",), 16)
+    });
+    bench_halo::<LN, 32, _>(&set, &mut group, |s: &str| {
+        BenchmarkId::new(&format!("{s} for n: 10 ",), 32)
+    });
+    bench_halo::<LN, 64, _>(&set, &mut group, |s: &str| {
+        BenchmarkId::new(&format!("{s} for n: 10 ",), 64)
+    });
+    bench_halo::<LN, 128, _>(&set, &mut group, |s: &str| {
+        BenchmarkId::new(&format!("{s} for n: 10 ",), 128)
+    });
+    bench_halo::<LN, 256, _>(&set, &mut group, |s: &str| {
+        BenchmarkId::new(&format!("{s} for n: 10 ",), 256)
+    });
     group.finish();
 }
 
 fn bench_with_n(c: &mut Criterion) {
+    const LN: usize = 4;
     let mut group = c.benchmark_group("with_changed_n");
-    for n in 5..=20 {
-        let set = gen_rand_list(n);
-        bench_halo::<32, _>(&set, &mut group, |s: &str| {
+    for n in [5, 10, 15, 20] {
+        let set = gen_rand_list::<LN>(n);
+        bench_halo::<LN, 32, _>(&set, &mut group, |s: &str| {
             BenchmarkId::new(&format!("{s} for m: 32 ",), n)
         });
     }
@@ -32,7 +48,17 @@ fn bench_with_n(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_halo<const M: usize, F: Fn(&str) -> BenchmarkId>(
+fn bench_with_le(c: &mut Criterion) {
+    let mut group = c.benchmark_group("with_changed_le");
+    seq_macro::seq!(LN in 1..5 {
+        let set = gen_rand_list::<LN>(10);
+        bench_halo::<LN,32,_>(&set, &mut group,|s: &str| BenchmarkId::new(&format!("{s} for m:32, n: 10 ", ), LN));
+    });
+
+    group.finish();
+}
+
+fn bench_halo<const LN: usize, const M: usize, F: Fn(&str) -> BenchmarkId>(
     set: &Vec<[u64; LN]>,
     group: &mut BenchmarkGroup<WallTime>,
     gen_id: F,
@@ -40,14 +66,6 @@ fn bench_halo<const M: usize, F: Fn(&str) -> BenchmarkId>(
     let psc = Psc::<LN, M, LB>::new(&set);
     let element = set.choose(&mut rand::thread_rng()).expect("set is empty");
     let (param, pk) = Psc::<LN, M, LB>::zk_setup();
-
-    // bench setup
-    group.bench_function(gen_id("set up"), |b| {
-        b.iter(|| {
-            Psc::<LN, M, LB>::zk_setup();
-        })
-    });
-
     let proof = psc.zk_prove_halo(element, &param, &pk);
 
     // bench membership proof
@@ -86,7 +104,8 @@ fn bench_halo<const M: usize, F: Fn(&str) -> BenchmarkId>(
         })
     });
 
-    let fake_element = [1, 1, 1, 0];
+    let set_size = set.len() as u64;
+    let fake_element = [set_size; LN];
     let proof = psc.zk_prove_halo(&fake_element, &param, &pk);
 
     // bench non-membership proof
@@ -124,25 +143,14 @@ fn bench_halo<const M: usize, F: Fn(&str) -> BenchmarkId>(
     assert_eq!(result.unwrap(), false);
 }
 
-fn gen_rand_list(n: usize) -> Vec<[u64; LN]> {
+fn gen_rand_list<const LN: usize>(n: usize) -> Vec<[u64; LN]> {
     let set_size = 1 << n;
-    println!("Generate test set");
-    let mut rng = rand::thread_rng();
-    let mut set = HashSet::with_capacity(set_size);
-
-    let mut filled = 0;
-    while filled < set_size {
-        if set.insert([rng.gen::<u64>(), rng.gen::<u64>(), rng.gen::<u64>(), 1]) {
-            filled += 1;
-        }
-    }
-
-    return set.into_iter().collect::<Vec<_>>();
+    (0..set_size).map(|e| [e; LN]).collect::<Vec<_>>()
 }
 
 criterion_group! {
     name = benches;
-    config = Criterion::default().measurement_time(Duration::from_secs(50)).sample_size(10);
-    targets = bench_with_m, bench_with_n
+    config = Criterion::default().measurement_time(Duration::from_secs(30)).sample_size(100);
+    targets = bench_with_m, bench_with_n, bench_with_le
 }
 criterion_main!(benches);
