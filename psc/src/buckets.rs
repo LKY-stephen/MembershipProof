@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 
-use crate::hashes::highwayhash_64;
+use crate::hashes::{get_bucket_index, get_k_index};
 use halo2_proofs::pasta::Fp;
-use murmurhash3::murmurhash3_x86_32;
 use rand::prelude::*;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 #[derive(Clone)]
-pub(crate) enum Node {
+pub enum Node {
     Raw((u32, Vec<u64>)),
     Field(Fp),
 }
 pub(crate) struct Buckets<const LE: usize> {
     buckets: Vec<Vec<[u64; LE]>>,
-    k: Vec<u64>,
+    k: Vec<u32>,
 }
 
 impl<const LE: usize> Buckets<LE> {
@@ -23,7 +22,7 @@ impl<const LE: usize> Buckets<LE> {
         }
     }
 
-    pub(crate) fn get_k(&self) -> Vec<u64> {
+    pub(crate) fn get_k(&self) -> Vec<u32> {
         self.k.clone()
     }
 
@@ -47,15 +46,15 @@ impl<const LE: usize> Buckets<LE> {
                 result = self.buckets.clone();
                 ks = vec![];
             }
-            let k = rng.next_u64();
+            let k = rng.next_u32();
             let splited_buckets = result
                 .par_iter()
                 .map(|bucket| {
                     let mut splitted = [vec![], vec![]];
                     for element in bucket {
-                        let hash = highwayhash_64(k, element);
+                        let hash = get_k_index(k, element);
                         // get the last bit of the second 64-bit word
-                        splitted[(hash & 1) as usize].push(element.to_owned());
+                        splitted[hash].push(element.to_owned());
                     }
                     splitted
                 })
@@ -73,7 +72,8 @@ impl<const LE: usize> Buckets<LE> {
             ks.push(k);
             depth += 1;
 
-            // println!("max_set_size is {max_set} for the {depth} split");
+            #[cfg(debug_assertions)]
+            println!("max_set_size is {max_set} for the {depth} split");
         }
 
         self.buckets = result;
@@ -96,21 +96,10 @@ impl<const LE: usize> Buckets<LE> {
             .flat_map(|bucket| {
                 let mut r = 0_u32;
 
-                let bucket_u8 = bucket
-                    .iter()
-                    .map(|x| {
-                        let mut bytes = vec![];
-                        for i in 0..LE {
-                            bytes.extend_from_slice(&x[i].to_le_bytes());
-                        }
-                        bytes
-                    })
-                    .collect::<Vec<_>>();
-
                 while r < u32::MAX {
-                    let index = bucket_u8
+                    let index = bucket
                         .iter()
-                        .map(|x| (murmurhash3_x86_32(x, r) as usize & bucket_size - 1, x))
+                        .map(|x| (get_bucket_index(x, r, bucket_size - 1), x))
                         .collect::<HashMap<_, _>>();
 
                     if index.len() != bucket.len() {
@@ -122,13 +111,7 @@ impl<const LE: usize> Buckets<LE> {
                     let mut result = vec![];
                     for i in 0..bucket_size {
                         if let Some(&x) = index.get(&i) {
-                            result.push(Node::Raw((
-                                r,
-                                x.to_vec()
-                                    .chunks(8)
-                                    .map(|x| u64::from_le_bytes(x.try_into().unwrap()))
-                                    .collect(),
-                            )));
+                            result.push(Node::Raw((r, x.to_vec())));
                         } else {
                             result.push(Node::Raw((r, vec![r as u64])));
                         }

@@ -14,7 +14,6 @@ bitvec = "1.0.1"
 ff = "0.13"
 highway = "1.0.0"
 rayon = "1.7"
-murmurhash3  = "0.0.5"
 rand="0.8.5"
 
 [dev-dependencies]

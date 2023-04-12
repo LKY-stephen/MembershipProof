@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use psc::{Psc, SetCommitment};
+    use psc::traits::*;
+    use psc::Psc;
     use rand::seq::SliceRandom;
     use rand::{self, Rng};
     use rstest::rstest;
@@ -42,10 +43,10 @@ mod tests {
     #[case(100)]
     #[case(1000)]
     #[case(10_000)]
-    fn random_zk_halo_tests(#[case] num: usize) {
+    fn random_sh_halo_tests(#[case] num: usize) {
         const LN: usize = 4;
         const LE: usize = 3;
-        const M: usize = 32;
+        const M: usize = 14;
 
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
@@ -54,10 +55,10 @@ mod tests {
         println!("Start Querying");
 
         let element = set.choose(&mut rand::thread_rng()).expect("set is empty");
-        let (param, pk) = Psc::<LN, M, LE>::zk_setup();
-        let proof = psc.zk_prove_halo(element, &param, &pk);
+        let (param, pk) = Psc::<LN, M, LE>::sh_setup();
+        let proof = psc.sh_prove_halo(element, &param, &pk);
         let (set_commitment, k_commitment) = psc.get_commitment();
-        let result = Psc::<LN, M, LE>::zk_verify_halo(
+        let result = Psc::<LN, M, LE>::sh_verify_halo(
             element,
             &proof,
             &set_commitment,
@@ -69,10 +70,53 @@ mod tests {
         assert_eq!(result.unwrap(), true);
 
         let fake_element = [1, 1, 1, 0];
-        let proof = psc.zk_prove_halo(&fake_element, &param, &pk);
+        let proof = psc.sh_prove_halo(&fake_element, &param, &pk);
         let (set_commitment, k_commitment) = psc.get_commitment();
-        let result = Psc::<LN, M, LE>::zk_verify_halo(
+        let result = Psc::<LN, M, LE>::sh_verify_halo(
             &fake_element,
+            &proof,
+            &set_commitment,
+            &k_commitment,
+            &param,
+            pk.get_vk(),
+        );
+        assert_eq!(result.is_ok(), true);
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[rstest]
+    #[case(100)]
+    #[case(1000)]
+    #[case(10_000)]
+    fn random_eh_halo_tests(#[case] num: usize) {
+        const LN: usize = 4;
+        const LE: usize = 3;
+        const M: usize = 12;
+
+        println!("Generate test set");
+        let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
+        println!("Generate PSC dict");
+        let psc = Psc::<LN, M, LE>::new(&set);
+        println!("Start Querying");
+
+        let element = set.choose(&mut rand::thread_rng()).expect("set is empty");
+        let (param, pk) = Psc::<LN, M, LE>::eh_setup();
+        let proof = psc.eh_prove_halo(element, &param, &pk);
+        let (set_commitment, k_commitment) = psc.get_commitment();
+        let result = Psc::<LN, M, LE>::eh_verify_halo(
+            &proof,
+            &set_commitment,
+            &k_commitment,
+            &param,
+            pk.get_vk(),
+        );
+        assert_eq!(result.is_ok(), true);
+        assert_eq!(result.unwrap(), true);
+
+        let fake_element = [1, 1, 1, 0];
+        let proof = psc.eh_prove_halo(&fake_element, &param, &pk);
+        let (set_commitment, k_commitment) = psc.get_commitment();
+        let result = Psc::<LN, M, LE>::eh_verify_halo(
             &proof,
             &set_commitment,
             &k_commitment,

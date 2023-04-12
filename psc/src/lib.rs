@@ -2,9 +2,13 @@ mod buckets;
 mod halo_circuit;
 mod hashes;
 mod poseidon_spec;
+mod proof;
+pub mod traits;
+
 use crate::buckets::Buckets;
 use crate::buckets::Node;
-use crate::halo_circuit::circuit::MerkleExtendedPathCircuit;
+use crate::halo_circuit::eh_circuit::MerkleExtendedPathEHCircuit;
+use crate::halo_circuit::sh_circuit::MerkleExtendedPathSHCircuit;
 use crate::hashes::*;
 use crate::poseidon_spec::PoseidonSpec;
 use ff::Field;
@@ -16,7 +20,13 @@ use halo2_proofs::plonk::{
 };
 use halo2_proofs::poly::commitment::Params;
 use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
+use proof::EHProof;
+use proof::Proof;
+use proof::SHProof;
 use rand::rngs::OsRng;
+use traits::EHScheme;
+use traits::SHScheme;
+use traits::SetCommitment;
 
 /// Psc is an auxirary for a set of elements and supports to generate
 /// prove that a given element is in or not in the set.
@@ -28,56 +38,7 @@ pub struct Psc<const LE: usize, const LM: usize, const LB: usize> {
     aux: Vec<Vec<Node>>,
     set_commitment: [u8; 32],
     k_commitment: [u64; 4],
-    k: Vec<u64>,
-}
-
-pub struct Proof {
-    r: u32,
-    k: Vec<u64>,
-    proof: Vec<Node>,
-}
-
-pub struct ZKProof {
-    r: u32,
-    k: Vec<u64>,
-    f: Fp,
-    proof: Vec<u8>,
-}
-
-impl ZKProof {
-    pub fn len(&self) -> usize {
-        4 + (self.k.len() + 1) * 8 + self.proof.len()
-    }
-}
-pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
-    type Element;
-
-    fn prove(&self, element: &[u64; LE]) -> Proof;
-
-    fn verify_membership(
-        element: &[u64; LE],
-        witness: &Proof,
-        set_commitment: &[u8; 32],
-        k_commitment: &[u64; 4],
-    ) -> Result<bool, String>;
-
-    fn zk_prove_halo(
-        &self,
-        element: &[u64; LE],
-        param: &Params<EqAffine>,
-        pk: &ProvingKey<EqAffine>,
-    ) -> ZKProof;
-
-    fn zk_verify_halo(
-        element: &[u64; LE],
-        witness: &ZKProof,
-        set_commitment: &[u8; 32],
-        k_commitment: &[u64; 4],
-        param: &Params<EqAffine>,
-        vk: &VerifyingKey<EqAffine>,
-    ) -> Result<bool, String>;
-
-    fn zk_setup() -> (Params<EqAffine>, ProvingKey<EqAffine>);
+    k: Vec<u32>,
 }
 
 impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
@@ -125,7 +86,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
         // println!("Start maping for buckets");
         let mut aux = vec![buckets.init_aux(Self::BUCKET_SIZE)];
         let raw_leaves = aux.first().expect("empty leaves");
-        aux.push(raw_leaves.iter().map(poseidonhash_node).collect());
+        aux.push(raw_leaves.iter().map(poseidonhash_node::<LE>).collect());
 
         // recursively compute the root.
         while aux.last().unwrap().len() > 1 {
@@ -160,18 +121,12 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
     pub fn get_commitment(&self) -> ([u8; 32], [u64; 4]) {
         (self.set_commitment.clone(), self.k_commitment.clone())
     }
-}
 
-impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB>
-    for Psc<LE, LM, LB>
-{
-    type Element = [u8; LE];
-
-    fn prove(&self, element: &[u64; LE]) -> Proof {
+    fn get_position_r(&self, element: &[u64; LE]) -> (usize, u32) {
         let index = self
             .k
             .iter()
-            .map(|k| (highwayhash_64(*k, &element) & 1) as usize)
+            .map(|k| (get_k_index(*k, &element) & 1) as usize)
             .collect::<Vec<_>>();
 
         assert_eq!(index.len(), Self::MAX_TREE_DEPTH);
@@ -187,76 +142,17 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
             Node::Field(_) => panic!("raw leaf should not be a filed"),
             Node::Raw((r, _)) => r.to_owned(),
         };
-
         // fetch the real leaf
-        position += get_index(element, r, Self::BUCKET_SIZE - 1);
+        position += get_bucket_index(element, r, Self::BUCKET_SIZE as usize - 1);
 
-        // fetch the path
-        let mut path = vec![self.aux[1][position].clone()];
-
-        for level in 0..n {
-            if position % 2 == 0 {
-                path.push(self.aux[level + 1][position + 1].clone());
-            } else {
-                path.push(self.aux[level + 1][position - 1].clone());
-            }
-            position /= 2;
-        }
-
-        path.reverse();
-
-        Proof {
-            r,
-            k: self.k.clone(),
-            proof: path,
-        }
+        return (position, r);
     }
 
-    fn zk_prove_halo(
-        &self,
-        element: &[u64; LE],
-        param: &Params<EqAffine>,
-        pk: &ProvingKey<EqAffine>,
-    ) -> ZKProof {
-        const W: usize = 3;
-        const R: usize = W - 1;
-
-        let index = self
-            .k
-            .iter()
-            .map(|k| (highwayhash_64(*k, &element) & 1) as usize)
-            .collect::<Vec<_>>();
-
-        assert_eq!(index.len(), Self::MAX_TREE_DEPTH);
-
-        // n is depth of real tree
+    fn get_merkle_path(&self, mut position: usize) -> (Vec<Node>, Vec<Node>) {
         let n = self.aux.len() - 2;
-
-        let mut position = index.iter().take(n - LB).fold(0, |acc, &x| (acc << 1) + x) << LB;
-
-        // fetch the first leaf of the bucket
-        let bucket_leaf = &self.aux[0][position];
-        let r = match bucket_leaf {
-            Node::Field(_) => panic!("raw leaf should not be a filed"),
-            Node::Raw((r, _)) => r.to_owned(),
-        };
-
-        // fetch the real leaf
-        let bucket_offset = get_index(element, r, Self::BUCKET_SIZE - 1);
-        position += bucket_offset;
 
         let mut left = vec![];
         let mut right = vec![];
-
-        // first we input root
-        let root = self.aux.last().expect("aux should not be empty")[0].to_owned();
-
-        let mut public = vec![match root {
-            Node::Field(f) => f,
-            _ => panic!("root should be a field element"),
-        }];
-
-        let leaf = self.aux[1][position].clone();
         for level in 0..n {
             if position % 2 == 0 {
                 left.push(self.aux[level + 1][position].clone());
@@ -268,48 +164,244 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
             position /= 2;
         }
 
-        let mut copy = vec![Value::known(Fp::ONE); LM - n + LB - 1];
+        (left, right)
+    }
+
+    fn get_n(&self) -> usize {
+        self.aux.len() - 2
+    }
+
+    fn get_copy(&self) -> Vec<Value<Fp>> {
+        let mut copy = vec![Value::known(Fp::ONE); LM - self.get_n() + LB - 1];
         copy.resize_with(LM, || Value::known(Fp::ZERO));
-        let prover_circuit = MerkleExtendedPathCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
-            left.into_iter()
-                .map(|x| match x {
-                    Node::Field(f) => vec![Value::known(f)],
-                    _ => panic!("left should be a field element"),
-                })
-                .collect(),
-            right
-                .into_iter()
-                .map(|x| match x {
-                    Node::Field(f) => vec![Value::known(f)],
-                    _ => panic!("left should be a field element"),
-                })
-                .collect(),
-            copy,
+        copy
+    }
+}
+
+impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB>
+    for Psc<LE, LM, LB>
+{
+    type Element = [u64; LE];
+
+    fn prove(&self, element: &Self::Element) -> Proof<LE, LB> {
+        // fetch the path
+        let (position, r) = self.get_position_r(element);
+
+        let (left, right) = self.get_merkle_path(position);
+
+        Proof::new(r, self.k.clone(), left, right)
+    }
+
+    fn verify_membership(
+        element: &Self::Element,
+        proof: &Proof<LE, LB>,
+        set_commitment: &[u8; 32],
+        k_commitment: &[u64; 4],
+    ) -> Result<bool, String> {
+        // verify the k commitment
+        proof.verify_k(k_commitment)?;
+
+        Ok(proof.verify(element, set_commitment)?)
+    }
+}
+
+impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for Psc<LE, LM, LB> {
+    type Element = [u64; LE];
+    fn eh_prove_halo(
+        &self,
+        element: &Self::Element,
+        param: &Params<EqAffine>,
+        pk: &ProvingKey<EqAffine>,
+    ) -> EHProof<LE, LM, LB> {
+        const W: usize = 3;
+        const R: usize = W - 1;
+
+        // n is depth of real tree
+
+        let (position, r) = self.get_position_r(element);
+
+        let leaf = self.aux[1][position].clone();
+
+        let mut hashed = vec![];
+
+        for i in 0..(LM - LB) {
+            let k = self.k[i];
+            let v = get_keyed_hash(k, element);
+            hashed.push(v);
+        }
+
+        let bucket_hash = get_keyed_hash(r, element);
+        hashed.push(bucket_hash);
+
+        let mut proof = EHProof::new(
+            r,
+            self.k.clone(),
+            match leaf {
+                Node::Field(f) => f,
+                Node::Raw(_) => panic!("leaf should be a filed element"),
+            },
+            hashed,
         );
+
+        let (left, right) = self.get_merkle_path(position);
+
+        // create the value for hash
+        let mut value = element.to_vec();
+        value.resize(4, 0);
+        let target = Value::known(Fp::from_raw(value.try_into().unwrap()));
+
+        // create the circuit
+        let prover_circuit =
+            MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                vec![target],
+                left.into_iter()
+                    .map(|x| match x {
+                        Node::Field(f) => vec![Value::known(f)],
+                        _ => panic!("left should be a field element"),
+                    })
+                    .collect(),
+                right
+                    .into_iter()
+                    .map(|x| match x {
+                        Node::Field(f) => vec![Value::known(f)],
+                        _ => panic!("left should be a field element"),
+                    })
+                    .collect(),
+                self.get_copy(),
+            );
 
         // fill in the full path
 
-        for bit in index.iter() {
-            public.push(match bit {
-                0 => Fp::ZERO,
-                1 => Fp::ONE,
-                _ => panic!("bit should be 0 or 1"),
-            });
+        let public = proof.create_instance(&self.set_commitment);
+
+        // [{(k, hash)}, (r,hash),leaf, index, root]
+
+        #[cfg(debug_assertions)]
+        {
+            use halo2_proofs::dev::MockProver;
+            // over kill k just for test purpose
+            let prover = MockProver::run(20, &prover_circuit, vec![public.clone()]).unwrap();
+            prover.assert_satisfied();
         }
 
-        for i in (0..LB).rev() {
-            public.push(match (bucket_offset >> i) & 1 {
-                0 => Fp::ZERO,
-                1 => Fp::ONE,
-                _ => panic!("bit should be 0 or 1"),
-            }); // Use bitwise AND instead of modulo
-        }
-        public.push(match leaf {
-            Node::Field(f) => f,
-            _ => panic!("leaf should be a field element"),
-        });
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
 
-        public.reverse();
+        // Create a proof
+        create_proof(
+            param,
+            pk,
+            &[prover_circuit],
+            &[&[&public]],
+            OsRng,
+            &mut transcript,
+        )
+        .expect("proof generation failed");
+        proof.update_proof(transcript.finalize());
+        proof
+    }
+
+    fn eh_verify_halo(
+        proof: &EHProof<LE, LM, LB>,
+        set_commitment: &[u8; 32],
+        k_commitment: &[u64; 4],
+        param: &Params<EqAffine>,
+        vk: &VerifyingKey<EqAffine>,
+    ) -> Result<bool, String> {
+        // verify the k commitment
+        proof.verify_k(k_commitment)?;
+
+        let public = proof.create_instance(set_commitment);
+
+        let membership = proof.get_membership();
+        // compute bucket index
+
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(proof.proof());
+        let strategy = SingleVerifier::new(param);
+        // verify the path
+        let result = verify_proof(param, vk, strategy, &[&[&public]], &mut transcript);
+
+        match result {
+            Ok(_) => Ok(membership),
+            Err(error) => panic!("Problem opening the file: {:?}", error),
+        }
+    }
+
+    fn eh_setup() -> (Params<EqAffine>, ProvingKey<EqAffine>) {
+        const POSEIDON_DEGREE: u32 = 7;
+        const W: usize = 3;
+        const R: usize = W - 1;
+
+        let empty_circuit =
+            MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                vec![Value::unknown()],
+                vec![vec![Value::unknown(); 1]; LM],
+                vec![vec![Value::unknown(); 1]; LM],
+                vec![Value::unknown(); LM],
+            );
+
+        // search for the best k
+        let mut k = POSEIDON_DEGREE;
+        let (param, vk) = loop {
+            let param = Params::new(k);
+            let result = keygen_vk(&param, &empty_circuit);
+            if result.is_ok() {
+                break (param, result.unwrap());
+            }
+            k += 1;
+        };
+        #[cfg(debug_assertions)]
+        println!("k is {k}");
+
+        let pk = keygen_pk(&param, vk, &empty_circuit).expect("keygen_pk should not fail");
+        return (param, pk);
+    }
+}
+
+impl<const LE: usize, const LM: usize, const LB: usize> SHScheme<LE, LM, LB> for Psc<LE, LM, LB> {
+    type Element = [u64; LE];
+    fn sh_prove_halo(
+        &self,
+        element: &Self::Element,
+        param: &Params<EqAffine>,
+        pk: &ProvingKey<EqAffine>,
+    ) -> SHProof<LE, LM, LB> {
+        const W: usize = 3;
+        const R: usize = W - 1;
+        let (position, r) = self.get_position_r(element);
+        // find the leaf
+
+        let leaf = self.aux[1][position].clone();
+        // first we input root
+        let mut proof = SHProof::new(
+            r,
+            self.k.clone(),
+            match leaf {
+                Node::Field(f) => f,
+                _ => panic!("leaf should be a field element"),
+            },
+        );
+
+        let public = proof.create_instance(&self.set_commitment, element);
+
+        let (left, right) = self.get_merkle_path(position);
+
+        let prover_circuit =
+            MerkleExtendedPathSHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                left.into_iter()
+                    .map(|x| match x {
+                        Node::Field(f) => vec![Value::known(f)],
+                        _ => panic!("left should be a field element"),
+                    })
+                    .collect(),
+                right
+                    .into_iter()
+                    .map(|x| match x {
+                        Node::Field(f) => vec![Value::known(f)],
+                        _ => panic!("left should be a field element"),
+                    })
+                    .collect(),
+                self.get_copy(),
+            );
 
         assert_eq![public.len(), LM + 2];
 
@@ -334,135 +426,29 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
         )
         .expect("proof generation failed");
 
-        ZKProof {
-            r,
-            k: self.k.clone(),
-            f: public.first().expect("public should not be empty").clone(),
-            proof: transcript.finalize(),
-        }
+        proof.update_proof(transcript.finalize());
+
+        proof
     }
 
-    fn verify_membership(
-        element: &[u64; LE],
-        witness: &Proof,
-        set_commitment: &[u8; 32],
-        k_commitment: &[u64; 4],
-    ) -> Result<bool, String> {
-        // verify the k commitment
-        let verified_k = highwayhash_default_256(&witness.k);
-        if *k_commitment != verified_k {
-            return Err("k_commitment is not correct".to_string());
-        }
-
-        let index = witness
-            .k
-            .iter()
-            .map(|k| (highwayhash_64(*k, &element) & 1) == 1)
-            .collect::<Vec<_>>();
-
-        // verify the index length
-        assert_eq!(index.len(), Self::MAX_TREE_DEPTH);
-
-        // compute bucket index
-
-        let pos = get_index(element, witness.r, Self::BUCKET_SIZE - 1);
-
-        // path before root
-        let n = witness.proof.len();
-
-        // remove fake sibiling
-        let mut index = index.into_iter().take(n - LB - 1).collect::<Vec<_>>();
-
-        for i in (0..LB).rev() {
-            index.push((pos & (1 << i)) != 0); // Use bitwise AND instead of modulo
-        }
-
-        // verify the index length, now it should be n-1
-        assert_eq!(index.len(), n - 1);
-
-        let leaf = witness.proof[n - 1].clone();
-        let my_leaf = poseidonhash_node(&Node::Raw((witness.r.clone(), element.to_vec())));
-        let membership = match (my_leaf, leaf.clone()) {
-            (Node::Field(input), Node::Field(proved)) => input == proved,
-            _ => panic!("Both leaf should be a filed element"),
-        };
-
-        // verify the path
-
-        let mut current = leaf;
-        // we fetch n-2  elements from the path exclude the root.
-        for i in (0..n - 1).rev() {
-            let sibiling = &witness.proof[i];
-            current = match index[i] {
-                false => poseidon_merkle_hash(&current, sibiling),
-                true => poseidon_merkle_hash(sibiling, &current),
-            };
-        }
-
-        if let Node::Field(v_root) = current {
-            let computed_commitment = v_root.to_repr();
-            if *set_commitment != computed_commitment {
-                return Err("set commitment does not match".to_string());
-            }
-        } else {
-            return Err("root is not a field element".to_string());
-        }
-
-        Ok(membership)
-    }
-
-    fn zk_verify_halo(
-        element: &[u64; LE],
-        witness: &ZKProof,
+    fn sh_verify_halo(
+        element: &Self::Element,
+        proof: &SHProof<LE, LM, LB>,
         set_commitment: &[u8; 32],
         k_commitment: &[u64; 4],
         param: &Params<EqAffine>,
         vk: &VerifyingKey<EqAffine>,
     ) -> Result<bool, String> {
         // verify the k commitment
-        let verified_k = highwayhash_default_256(&witness.k);
-        if *k_commitment != verified_k {
-            return Err("k_commitment is not correct".to_string());
-        }
+        proof.verify_k(k_commitment)?;
 
-        let mut public = vec![Fp::from_repr(set_commitment.to_owned()).unwrap()];
+        let public = proof.create_instance(set_commitment, element);
 
-        for k in witness.k.iter() {
-            public.push(match highwayhash_64(*k, &element) & 1 {
-                0 => Fp::ZERO,
-                1 => Fp::ONE,
-                _ => panic!("bit should be 0 or 1"),
-            });
-        }
+        assert_eq!(public.len(), LM + 2);
 
-        // compute bucket index
+        let membership = proof.get_membership(element);
 
-        let pos = get_index(element, witness.r, Self::BUCKET_SIZE - 1);
-
-        // get the final path
-        for i in (0..LB).rev() {
-            public.push(match (pos >> i) & 1 {
-                0 => Fp::ZERO,
-                1 => Fp::ONE,
-                _ => panic!("bit should be 0 or 1"),
-            });
-        }
-
-        // verify the index length, now it should be n-1
-        assert_eq!(public.len(), LM + 1);
-
-        let leaf = witness.f.clone();
-        let my_leaf = poseidonhash_node(&Node::Raw((witness.r.clone(), element.to_vec())));
-        let membership = match (my_leaf, leaf.clone()) {
-            (Node::Field(input), proved) => input == proved,
-            _ => panic!("Both leaf should be a field element"),
-        };
-
-        public.push(leaf);
-
-        public.reverse();
-
-        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&witness.proof[..]);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(proof.proof());
         let strategy = SingleVerifier::new(param);
         // verify the path
         let result = verify_proof(param, vk, strategy, &[&[&public]], &mut transcript);
@@ -473,27 +459,30 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
         }
     }
 
-    fn zk_setup() -> (Params<EqAffine>, ProvingKey<EqAffine>) {
+    fn sh_setup() -> (Params<EqAffine>, ProvingKey<EqAffine>) {
         const POSEIDON_DEGREE: u32 = 7;
         const W: usize = 3;
         const R: usize = W - 1;
 
-        let empty_circuit = MerkleExtendedPathCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
-            vec![vec![Value::unknown(); 1]; LM],
-            vec![vec![Value::unknown(); 1]; LM],
-            vec![Value::unknown(); LM],
-        );
+        let empty_circuit =
+            MerkleExtendedPathSHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                vec![vec![Value::unknown(); 1]; LM],
+                vec![vec![Value::unknown(); 1]; LM],
+                vec![Value::unknown(); LM],
+            );
 
         // search for the best k
-        let mut k = POSEIDON_DEGREE + LB as u32 + 1;
+        let mut k = POSEIDON_DEGREE;
         let (param, vk) = loop {
             let param = Params::new(k);
             let result = keygen_vk(&param, &empty_circuit);
             if result.is_ok() {
-                break (param, result.expect("keygen_vk should not fail"));
+                break (param, result.unwrap());
             }
             k += 1;
         };
+        #[cfg(debug_assertions)]
+        println!("k is {k}");
 
         let pk = keygen_pk(&param, vk, &empty_circuit).expect("keygen_pk should not fail");
         return (param, pk);
