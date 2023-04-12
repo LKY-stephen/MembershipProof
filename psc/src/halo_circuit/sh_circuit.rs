@@ -28,7 +28,7 @@ pub struct MerkleExtendedConfig<
 // For each input, we fixed the padding as [x,1,0,0,...,0]
 // inputs permutation rounds will go for all abosrb
 #[derive(Clone, Default)]
-pub struct MerkleExtendedPathCircuit<
+pub struct MerkleExtendedPathSHCircuit<
     F: PrimeField,
     S: Spec<F, W, R>,
     const M: usize,
@@ -49,7 +49,7 @@ impl<
         const W: usize,
         const R: usize,
         const B: usize,
-    > Circuit<F> for MerkleExtendedPathCircuit<F, S, M, W, R, B>
+    > Circuit<F> for MerkleExtendedPathSHCircuit<F, S, M, W, R, B>
 {
     type Config = MerkleExtendedConfig<F, S, M, W, R, B>;
 
@@ -127,23 +127,19 @@ impl<
             let (left, right) = layouter.assign_region(
                 || "load message",
                 |mut region| {
-                    let left = region
-                        .assign_advice(
-                            || format!("load left node at row {row}"),
-                            config.hash_input[0],
-                            0,
-                            || padded_left[row][0],
-                        )
-                        .expect("failed to read left node");
+                    let left = region.assign_advice(
+                        || format!("load left node at row {row}"),
+                        config.hash_input[0],
+                        0,
+                        || padded_left[row][0],
+                    )?;
 
-                    let right = region
-                        .assign_advice(
-                            || format!("load right node at row {row}"),
-                            config.hash_input[1],
-                            0,
-                            || padded_right[row][0],
-                        )
-                        .expect("failed to read right node");
+                    let right = region.assign_advice(
+                        || format!("load right node at row {row}"),
+                        config.hash_input[1],
+                        0,
+                        || padded_right[row][0],
+                    )?;
 
                     Ok((left, right))
                 },
@@ -170,7 +166,13 @@ impl<
             );
         }
 
-        merkle_chip.load_leaves(&mut layouter, left_nodes[0].clone(), right_nodes[0].clone())?;
+        // public:[leave, {index}, root]
+        merkle_chip.load_leaves(
+            &mut layouter,
+            left_nodes[0].clone(),
+            right_nodes[0].clone(),
+            0,
+        )?;
 
         // check root is correct
         layouter.constrain_instance(
@@ -180,7 +182,7 @@ impl<
         )?;
 
         // check path index is correct
-        merkle_chip.load_path(
+        merkle_chip.load_public_path(
             &mut layouter,
             left_nodes,
             right_nodes,
@@ -188,6 +190,7 @@ impl<
             &self.copy,
             M,
             B,
+            2,
         )?;
 
         return Ok(());
@@ -201,7 +204,7 @@ impl<
         const W: usize,
         const R: usize,
         const B: usize,
-    > MerkleExtendedPathCircuit<F, S, M, W, R, B>
+    > MerkleExtendedPathSHCircuit<F, S, M, W, R, B>
 {
     /// input the real path
     /// [left leave, right leave]
@@ -212,10 +215,10 @@ impl<
         left: Vec<Vec<Value<F>>>,
         right: Vec<Vec<Value<F>>>,
         copy: Vec<Value<F>>,
-    ) -> MerkleExtendedPathCircuit<F, S, M, W, R, B> {
+    ) -> MerkleExtendedPathSHCircuit<F, S, M, W, R, B> {
         assert_eq!(left.len(), right.len());
         assert_eq!(copy.len(), M);
-        MerkleExtendedPathCircuit {
+        MerkleExtendedPathSHCircuit {
             left: left
                 .into_iter()
                 .map(|v| v.try_into().expect("left inputs error"))

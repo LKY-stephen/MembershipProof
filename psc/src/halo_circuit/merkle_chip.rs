@@ -24,15 +24,16 @@ pub trait MerkleExtendedPathInstruction<F: PrimeField, const I: usize>: Chip<F> 
 
     /// Loads a left child, a right child and paths
     /// copy only works from b to m
-    fn load_path(
+    fn load_public_path(
         &self,
         layouter: &mut impl Layouter<F>,
         left: Vec<[AssignedCell<F, F>; I]>,
         right: Vec<[AssignedCell<F, F>; I]>,
         hash: Vec<[AssignedCell<F, F>; I]>,
         copy: &Vec<Value<F>>,
-        m: usize,
+        len: usize,
         b: usize,
+        position: usize,
     ) -> Result<(), Error>;
 
     /// Loads a left child, a right child
@@ -43,6 +44,7 @@ pub trait MerkleExtendedPathInstruction<F: PrimeField, const I: usize>: Chip<F> 
         layouter: &mut impl Layouter<F>,
         left: [AssignedCell<F, F>; I],
         right: [AssignedCell<F, F>; I],
+        position: usize,
     ) -> Result<(), Error>;
 
     /// check the final result with index
@@ -289,21 +291,22 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
 {
     type Node = Node<F, I>;
 
-    fn load_path(
+    fn load_public_path(
         &self,
         layouter: &mut impl Layouter<F>,
         left: Vec<[AssignedCell<F, F>; I]>,
         right: Vec<[AssignedCell<F, F>; I]>,
         hash: Vec<[AssignedCell<F, F>; I]>,
         copy: &Vec<Value<F>>,
-        m: usize,
+        len: usize,
         b: usize,
+        position: usize,
     ) -> Result<(), Error> {
         let config = self.config();
-        assert_eq!(m, right.len());
-        assert_eq!(m, left.len());
-        assert_eq!(m, copy.len());
-        assert_eq!(m, hash.len());
+        assert_eq!(len, right.len());
+        assert_eq!(len, left.len());
+        assert_eq!(len, copy.len());
+        assert_eq!(len, hash.len());
 
         layouter.assign_region(
             || "load path",
@@ -317,7 +320,7 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
                 // ....
                 // hash(i) =  left(i+1) if index =0 else right(i+1)
 
-                for i in 0..(m - 1) {
+                for i in 0..(len - 1) {
                     let cur_pos = i * 3;
                     let hash_pos = cur_pos + 2;
                     for j in 0..I {
@@ -358,7 +361,7 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
                     region.assign_advice_from_instance(
                         || "assign index",
                         config.public,
-                        I + i + 1,
+                        position + i,
                         config.index_flag,
                         hash_pos,
                     )?;
@@ -366,12 +369,12 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
 
                 // for the final row, we do not check index further but we do instance check
 
-                let last_pos = (m - 1) * 3;
+                let last_pos = (len - 1) * 3;
                 for j in 0..I {
-                    left[m - 1][j]
+                    left[len - 1][j]
                         .copy_advice(|| "assign left", &mut region, config.value[j], last_pos)
                         .unwrap();
-                    right[m - 1][j]
+                    right[len - 1][j]
                         .copy_advice(
                             || "assign right",
                             &mut region,
@@ -413,6 +416,7 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
         layouter: &mut impl Layouter<F>,
         left: [AssignedCell<F, F>; I],
         right: [AssignedCell<F, F>; I],
+        leaf_row: usize,
     ) -> Result<(), Error> {
         let config = self.config();
 
@@ -435,7 +439,7 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
                         region.assign_advice_from_instance(
                             || "copy selected leaf from instance",
                             config.public,
-                            j,
+                            leaf_row,
                             config.value[j],
                             2,
                         )?;
@@ -444,7 +448,7 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
                     region.assign_advice_from_instance(
                         || "assign index for zero layer",
                         config.public,
-                        I,
+                        leaf_row + 1,
                         config.index_flag,
                         2,
                     )?;

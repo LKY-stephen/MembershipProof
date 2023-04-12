@@ -1,18 +1,24 @@
 use crate::buckets::Node;
+use ff::PrimeField;
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3};
 use halo2_proofs::pasta::Fp;
-use highway::{HighwayHash, HighwayHasher, Key};
-use murmurhash3::murmurhash3_x86_32;
+use highway::{HighwayHash, HighwayHasher};
 
-pub(crate) fn highwayhash_64<const LE: usize>(key: u64, element: &[u64; LE]) -> u64 {
-    let mut hasher = HighwayHasher::new(Key([key, 1, 2, 3]));
-    for x in element.iter() {
-        hasher.append(&x.to_le_bytes());
-    }
-    hasher.finalize64()
+pub(crate) fn get_k_index<const LE: usize>(key: u32, element: &[u64; LE]) -> usize {
+    fp_mod(get_keyed_hash(key, element), 1)
 }
 
-pub(crate) fn highwayhash_default_256(element: &Vec<u64>) -> [u64; 4] {
+pub fn get_bucket_index<const LE: usize>(element: &[u64; LE], r: u32, mask: usize) -> usize {
+    fp_mod(get_keyed_hash(r, element), mask)
+}
+
+pub(crate) fn get_keyed_hash<const LE: usize>(key: u32, element: &[u64; LE]) -> Fp {
+    let mut rhs = element.to_vec();
+    rhs.resize_with(4, || 0);
+    poseidonhash(Fp::from(key as u64), Fp::from_raw(rhs.try_into().unwrap()))
+}
+
+pub(crate) fn highwayhash_default_256(element: &Vec<u32>) -> [u64; 4] {
     let mut hasher = HighwayHasher::default();
     for x in element.iter() {
         hasher.append(&x.to_le_bytes());
@@ -21,17 +27,13 @@ pub(crate) fn highwayhash_default_256(element: &Vec<u64>) -> [u64; 4] {
 }
 
 /// for simmilicity we assume there are at most
-pub(crate) fn poseidonhash_node(node: &Node) -> Node {
+pub(crate) fn poseidonhash_node<const LE: usize>(node: &Node) -> Node {
     match node {
         Node::Raw((r, rhs)) => {
-            let l = [*r as u64; 4];
-
-            let mut rhs = rhs.to_owned();
-            rhs.resize_with(4, || 0);
-            Node::Field(poseidonhash(
-                Fp::from_raw(l),
-                Fp::from_raw(rhs.try_into().unwrap()),
-            ))
+            let mut value = rhs.to_owned();
+            value.resize(LE, 0);
+            let hash = get_keyed_hash::<LE>(*r, &value.try_into().unwrap());
+            Node::Field(hash)
         }
         Node::Field(_) => panic!("No need to hash a field element"),
     }
@@ -46,12 +48,8 @@ pub(crate) fn poseidon_merkle_hash(lhs: &Node, rhs: &Node) -> Node {
     }
 }
 
-pub fn get_index<const LE: usize>(value: &[u64; LE], r: u32, mask: usize) -> usize {
-    let element = value
-        .iter()
-        .flat_map(|x| x.to_le_bytes())
-        .collect::<Vec<_>>();
-    murmurhash3_x86_32(&element, r) as usize & mask
+pub fn fp_mod(f: Fp, mask: usize) -> usize {
+    f.to_repr().last().expect("should not be empty").to_owned() as usize & mask
 }
 
 fn poseidonhash(lhs: Fp, rhs: Fp) -> Fp {
