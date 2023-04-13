@@ -46,7 +46,7 @@ mod tests {
     fn random_sh_halo_tests(#[case] num: usize) {
         const LN: usize = 4;
         const LE: usize = 3;
-        const M: usize = 14;
+        const M: usize = 32;
 
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
@@ -91,7 +91,7 @@ mod tests {
     fn random_eh_halo_tests(#[case] num: usize) {
         const LN: usize = 4;
         const LE: usize = 3;
-        const M: usize = 12;
+        const M: usize = 32;
 
         println!("Generate test set");
         let set = gen_rand_list(num).into_iter().collect::<Vec<_>>();
