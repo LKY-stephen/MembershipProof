@@ -4,7 +4,7 @@ use halo2_proofs::{
     poly::commitment::Params,
 };
 
-use crate::proof::{EHProof, Proof, SHProof};
+use crate::proof::{EHProof, Proof};
 
 pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
     type Element;
@@ -15,30 +15,7 @@ pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
         element: &Self::Element,
         proof: &Proof<LE, LB>,
         set_commitment: &[u8; 32],
-        k_commitment: &[u64; 4],
     ) -> Result<bool, String>;
-}
-
-pub trait SHScheme<const LE: usize, const LM: usize, const LB: usize> {
-    type Element;
-
-    fn sh_prove_halo(
-        &self,
-        element: &Self::Element,
-        param: &Params<EqAffine>,
-        pk: &ProvingKey<EqAffine>,
-    ) -> SHProof<LE, LM, LB>;
-
-    fn sh_verify_halo(
-        element: &Self::Element,
-        proof: &SHProof<LE, LM, LB>,
-        set_commitment: &[u8; 32],
-        k_commitment: &[u64; 4],
-        param: &Params<EqAffine>,
-        vk: &VerifyingKey<EqAffine>,
-    ) -> Result<bool, String>;
-
-    fn sh_setup() -> (Params<EqAffine>, ProvingKey<EqAffine>);
 }
 
 pub trait EHScheme<const LE: usize, const LM: usize, const LB: usize> {
@@ -54,7 +31,6 @@ pub trait EHScheme<const LE: usize, const LM: usize, const LB: usize> {
     fn eh_verify_halo(
         proof: &EHProof<LE, LM, LB>,
         set_commitment: &[u8; 32],
-        k_commitment: &[u64; 4],
         param: &Params<EqAffine>,
         vk: &VerifyingKey<EqAffine>,
     ) -> Result<bool, String>;
