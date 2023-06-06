@@ -2,14 +2,18 @@ use crate::buckets::Node;
 use ff::PrimeField;
 use halo2_gadgets::poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3};
 use halo2_proofs::pasta::Fp;
-use highway::{HighwayHash, HighwayHasher};
 
-pub(crate) fn get_k_index<const LE: usize>(key: u32, element: &[u64; LE]) -> usize {
-    fp_mod(get_keyed_hash(key, element), 1)
+pub(crate) fn get_top_bits<const LE: usize>(key: u32, element: &[u64; LE], depth: usize) -> usize {
+    fp_top_k_bits(get_keyed_hash(key, element), depth)
 }
 
-pub fn get_bucket_index<const LE: usize>(element: &[u64; LE], r: u32, mask: usize) -> usize {
-    fp_mod(get_keyed_hash(r, element), mask)
+/// buckket_size must be in form of 2^k
+pub(crate) fn get_bucket_index<const LE: usize>(
+    element: &[u64; LE],
+    r: u32,
+    bucket_size: usize,
+) -> usize {
+    fp_mod(get_keyed_hash(r, element), bucket_size - 1)
 }
 
 pub(crate) fn get_keyed_hash<const LE: usize>(key: u32, element: &[u64; LE]) -> Fp {
@@ -18,15 +22,6 @@ pub(crate) fn get_keyed_hash<const LE: usize>(key: u32, element: &[u64; LE]) -> 
     poseidonhash(Fp::from(key as u64), Fp::from_raw(rhs.try_into().unwrap()))
 }
 
-pub(crate) fn highwayhash_default_256(element: &Vec<u32>) -> [u64; 4] {
-    let mut hasher = HighwayHasher::default();
-    for x in element.iter() {
-        hasher.append(&x.to_le_bytes());
-    }
-    hasher.finalize256()
-}
-
-/// for simmilicity we assume there are at most
 pub(crate) fn poseidonhash_node<const LE: usize>(node: &Node) -> Node {
     match node {
         Node::Raw((r, rhs)) => {
@@ -50,6 +45,22 @@ pub(crate) fn poseidon_merkle_hash(lhs: &Node, rhs: &Node) -> Node {
 
 pub fn fp_mod(f: Fp, mask: usize) -> usize {
     f.to_repr().last().expect("should not be empty").to_owned() as usize & mask
+}
+
+pub(crate) fn fp_top_k_bits(f: Fp, k: usize) -> usize {
+    let element = f.to_repr();
+
+    if k > std::mem::size_of::<usize>() * 8 || k > element.len() * 8 {
+        panic!("set is too big") // Return None if k is out of bounds
+    }
+
+    let mut result: usize = 0;
+    for i in 0..k {
+        let byte = element[i / 8];
+        let bit = (byte >> (7 - (i % 8))) & 1;
+        result = (result << 1) | (bit as usize);
+    }
+    result
 }
 
 fn poseidonhash(lhs: Fp, rhs: Fp) -> Fp {

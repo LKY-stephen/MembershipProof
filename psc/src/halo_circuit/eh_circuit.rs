@@ -184,7 +184,7 @@ impl<
                 let r = region.assign_advice_from_instance(
                     || format!("load r"),
                     config.public,
-                    2 * (M - B),
+                    0,
                     config.hash_input[0],
                     0,
                 )?;
@@ -213,65 +213,64 @@ impl<
         )?;
 
         // public[1] = hash(r=public[0],value);
-        layouter.constrain_instance(hash.cell(), config.public, 2 * (M - B) + 1)?;
+        layouter.constrain_instance(hash.cell(), config.public, 1)?;
 
-        // for all k, verify public[2*row+3] = hash(k=public[2*row], value);
-        for row in 0..(M - B) {
-            let poseidon_chip = Pow5Chip::construct(config.pow5_config.clone());
-            let (value, k) = layouter.assign_region(
-                || "load for para",
-                |mut region| {
-                    let value = leaf_value.clone().copy_advice(
-                        || format!("load value for row {row}"),
-                        &mut region,
-                        config.hash_input[0],
-                        0,
-                    )?;
+        // for k, verify public[3] = hash(k=public[2], value);
 
-                    let k = region.assign_advice_from_instance(
-                        || format!("load k node at row {row}"),
-                        config.public,
-                        2 * row,
-                        config.hash_input[1],
-                        0,
-                    )?;
+        let poseidon_chip = Pow5Chip::construct(config.pow5_config.clone());
+        let (value, k) = layouter.assign_region(
+            || "load for para",
+            |mut region| {
+                let value = leaf_value.clone().copy_advice(
+                    || format!("load value for k"),
+                    &mut region,
+                    config.hash_input[0],
+                    0,
+                )?;
 
-                    Ok((value, k))
-                },
-            )?;
-            let message = vec![k, value];
-            let hasher = Hash::<_, _, S, ConstantLength<2>, W, R>::init(
-                poseidon_chip,
-                layouter.namespace(|| "init"),
-            )?;
+                let k = region.assign_advice_from_instance(
+                    || format!("load k node at row k"),
+                    config.public,
+                    2,
+                    config.hash_input[1],
+                    0,
+                )?;
 
-            let hash = hasher.hash(
-                layouter.namespace(|| "hash"),
-                message
-                    .try_into()
-                    .expect("incorrect length for poseidon inputs"),
-            )?;
+                Ok((value, k))
+            },
+        )?;
+        let message = vec![k, value];
+        let hasher = Hash::<_, _, S, ConstantLength<2>, W, R>::init(
+            poseidon_chip,
+            layouter.namespace(|| "init"),
+        )?;
 
-            // public[1] = hash(r=public[0],value);
-            layouter.constrain_instance(hash.cell(), config.public, 2 * row + 1)?;
-        }
+        let hash = hasher.hash(
+            layouter.namespace(|| "hash"),
+            message
+                .try_into()
+                .expect("incorrect length for poseidon inputs"),
+        )?;
 
-        let position = 2 * (M - B + 1);
+        layouter.constrain_instance(hash.cell(), config.public, 3)?;
+
+        // load leave
         merkle_chip.load_leaves(
             &mut layouter,
             left_nodes[0].clone(),
             right_nodes[0].clone(),
-            position,
+            4,
         )?;
 
         // check root is correct
         layouter.constrain_instance(
             hash_nodes.last().expect("no empty hash")[0].cell(),
             config.public,
-            3 * (M + 1) - 2 * B,
+            M + 5,
         )?;
 
         // check path index is correct
+        // position from the second bit
         merkle_chip.load_public_path(
             &mut layouter,
             left_nodes,
@@ -280,7 +279,7 @@ impl<
             &self.copy,
             M,
             B,
-            position + 2,
+            6,
         )?;
         return Ok(());
     }

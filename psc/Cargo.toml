@@ -12,7 +12,6 @@ halo2_gadgets="0.3.0"
 halo2_proofs="0.3.0"
 bitvec = "1.0.1"
 ff = "0.13"
-highway = "1.0.0"
 rayon = "1.7"
 rand="0.8.5"
 

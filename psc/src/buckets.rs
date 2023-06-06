@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::hashes::{get_bucket_index, get_k_index};
+use crate::hashes::{get_bucket_index, get_top_bits};
 use halo2_proofs::pasta::Fp;
 use rand::prelude::*;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
@@ -11,73 +11,66 @@ pub enum Node {
 }
 pub(crate) struct Buckets<const LE: usize> {
     buckets: Vec<Vec<[u64; LE]>>,
-    k: Vec<u32>,
+    k: u32,
 }
 
 impl<const LE: usize> Buckets<LE> {
     pub(crate) fn new(set: Vec<[u64; LE]>) -> Self {
         Self {
             buckets: vec![set],
-            k: vec![],
+            k: 0,
         }
     }
 
-    pub(crate) fn get_k(&self) -> Vec<u32> {
-        self.k.clone()
+    pub(crate) fn get_k(&self) -> u32 {
+        self.k
     }
 
     pub(crate) fn split(&mut self, set_size: usize, bucket_size: usize) {
-        let mut max_set = set_size;
+        assert_eq!(self.buckets.len(), 1);
         let rng = &mut rand::thread_rng();
 
         // make sure we have enough buffer to speed up the brute force search
-        // we try for at most 4n set.
-        let depth_bound = ((set_size / bucket_size) as f64).log2().round() as usize + 2;
+        let mut depth = ((set_size / bucket_size) as f64).log2().round() as usize + 1;
 
-        let mut depth = 0;
-        let mut result = self.buckets.clone();
-        let mut ks = vec![];
-        // split till the bucket size
-        while max_set > bucket_size {
-            if depth > depth_bound {
-                // need to retry
-                println!("exceed bound, retry");
-                depth = 0;
-                result = self.buckets.clone();
-                ks = vec![];
+        let mut k = 0;
+        let mut counter = 0_u8;
+        loop {
+            if counter == 100 {
+                // increase depth
+                counter = 0;
+
+                #[cfg(debug_assertions)]
+                println!("cannot find proper k for depth={depth}, increase depth");
+                depth += 1;
             }
-            let k = rng.next_u32();
-            let splited_buckets = result
+
+            let mut hash_map = HashMap::new();
+            for (pos, e) in self.buckets[0]
                 .par_iter()
-                .map(|bucket| {
-                    let mut splitted = [vec![], vec![]];
-                    for element in bucket {
-                        let hash = get_k_index(k, element);
-                        // get the last bit of the second 64-bit word
-                        splitted[hash].push(element.to_owned());
-                    }
-                    splitted
-                })
-                .collect::<Vec<_>>();
+                .map(|e| (get_top_bits::<LE>(k, e, depth), e.to_owned()))
+                .collect::<Vec<_>>()
+            {
+                hash_map.entry(pos).or_insert(vec![]).push(e);
+            }
 
-            // flatten the splitted buckets
-            result = splited_buckets.into_iter().flatten().collect();
+            // if this split is good, we will have all buckets with size <= bucket_size
+            if hash_map.iter().all(|(_, v)| v.len() <= bucket_size) {
+                // we found the k
+                let width = 1 << depth;
+                let mut vec = vec![];
+                for i in 0..width {
+                    vec.push(hash_map.entry(i).or_insert(vec![]).to_owned());
+                }
+                self.buckets = vec;
+                self.k = k;
+                break;
+            }
 
-            max_set = result
-                .iter()
-                .max_by_key(|&x| x.len())
-                .expect("should not be empty")
-                .len();
-
-            ks.push(k);
-            depth += 1;
-
-            #[cfg(debug_assertions)]
-            println!("max_set_size is {max_set} for the {depth} split");
+            // try next k
+            k = rng.next_u32();
+            counter += 1;
         }
-
-        self.buckets = result;
-        self.k = ks;
     }
 
     pub(crate) fn init_aux(&self, bucket_size: usize) -> Vec<Node> {
@@ -96,10 +89,15 @@ impl<const LE: usize> Buckets<LE> {
             .flat_map(|bucket| {
                 let mut r = 0_u32;
 
+                // for simplicity, we use (r,r) for empty hole, which is not secure;
+                // should use other proper things with different hash instead;
+                if bucket.len() == 0 {
+                    return vec![Node::Raw((r, vec![r as u64])); bucket_size];
+                }
                 while r < u32::MAX {
                     let index = bucket
                         .iter()
-                        .map(|x| (get_bucket_index(x, r, bucket_size - 1), x))
+                        .map(|x| (get_bucket_index(x, r, bucket_size), x))
                         .collect::<HashMap<_, _>>();
 
                     if index.len() != bucket.len() {
