@@ -66,7 +66,7 @@ fn bench_halo<const LN: usize, const M: usize, F: Fn(&str) -> BenchmarkId>(
 ) {
     let psc = Psc::<LN, M, LB>::new(&set);
     let element = set.choose(&mut rand::thread_rng()).expect("set is empty");
-    let set_commitment = psc.get_commitment();
+    let (set_commitment, k) = psc.get_commitment();
     let set_size = set.len() as u64;
     let fake_element = [set_size; LN];
 
@@ -83,13 +83,14 @@ fn bench_halo<const LN: usize, const M: usize, F: Fn(&str) -> BenchmarkId>(
 
     println!("EH membership proof size is {} bytes", proof.len());
 
-    let result = Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, &param, pk.get_vk());
+    let result = Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, k, &param, pk.get_vk());
     assert_eq!(result.is_ok(), true);
     assert_eq!(result.unwrap(), true);
 
     group.bench_function(gen_id("EH membership verification"), |b| {
         b.iter(|| {
-            Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, &param, pk.get_vk()).unwrap();
+            Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, k, &param, pk.get_vk())
+                .unwrap();
         })
     });
 
@@ -103,11 +104,12 @@ fn bench_halo<const LN: usize, const M: usize, F: Fn(&str) -> BenchmarkId>(
         })
     });
 
-    let result = Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, &param, pk.get_vk());
+    let result = Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, k, &param, pk.get_vk());
     // bench non-membership proof
     group.bench_function(gen_id("EH non-membership verification"), |b| {
         b.iter(|| {
-            Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, &param, pk.get_vk()).unwrap();
+            Psc::<LN, M, LB>::eh_verify_halo(&proof, &set_commitment, k, &param, pk.get_vk())
+                .unwrap();
         })
     });
 

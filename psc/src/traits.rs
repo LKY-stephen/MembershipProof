@@ -15,6 +15,7 @@ pub trait SetCommitment<const LE: usize, const LM: usize, const LB: usize> {
         element: &Self::Element,
         proof: &Proof<LE, LB>,
         set_commitment: &[u8; 32],
+        k: u32,
     ) -> Result<bool, String>;
 }
 
@@ -31,6 +32,7 @@ pub trait EHScheme<const LE: usize, const LM: usize, const LB: usize> {
     fn eh_verify_halo(
         proof: &EHProof<LE, LM, LB>,
         set_commitment: &[u8; 32],
+        k: u32,
         param: &Params<EqAffine>,
         vk: &VerifyingKey<EqAffine>,
     ) -> Result<bool, String>;

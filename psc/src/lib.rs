@@ -110,8 +110,8 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
         }
     }
 
-    pub fn get_commitment(&self) -> [u8; 32] {
-        self.set_commitment.clone()
+    pub fn get_commitment(&self) -> ([u8; 32], u32) {
+        (self.set_commitment.clone(), self.k)
     }
 
     fn get_position_r(&self, element: &[u64; LE]) -> (usize, u32) {
@@ -175,16 +175,17 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
 
         let (left, right) = self.get_merkle_path(position);
 
-        Proof::new(r, self.k, left, right)
+        Proof::new(r, left, right)
     }
 
     fn verify_membership(
         element: &Self::Element,
         proof: &Proof<LE, LB>,
         set_commitment: &[u8; 32],
+        k: u32,
     ) -> Result<bool, String> {
         // verify the k commitment
-        Ok(proof.verify(element, set_commitment)?)
+        Ok(proof.verify(element, set_commitment, k)?)
     }
 }
 
@@ -204,10 +205,17 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         let (position, r) = self.get_position_r(element);
 
         let leaf = self.aux[1][position].clone();
+        let leaf_value = match &self.aux[0][position] {
+            Node::Field(_) => panic!("raw leaf should not be a filed"),
+            Node::Raw((_, v)) => {
+                let mut value = v.to_owned();
+                value.resize(4, 0);
+                Value::known(Fp::from_raw(value.try_into().unwrap()))
+            }
+        };
 
         let mut proof = EHProof::new(
             r,
-            self.k,
             get_keyed_hash(self.k, element),
             get_keyed_hash(r, element),
             match leaf {
@@ -219,14 +227,14 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         let (left, right) = self.get_merkle_path(position);
 
         // create the value for queried element
-        let mut value = element.to_vec();
-        value.resize(4, 0);
+        let value = element.to_vec();
         let target = Value::known(Fp::from_raw(value.try_into().unwrap()));
 
         // create the circuit
         let prover_circuit =
             MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
                 vec![target],
+                vec![leaf_value],
                 left.into_iter()
                     .map(|x| match x {
                         Node::Field(f) => vec![Value::known(f)],
@@ -245,7 +253,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
 
         // fill in the full path
 
-        let public = proof.create_instance(&self.set_commitment);
+        let public = proof.create_instance(&self.set_commitment, self.k);
 
         // [r, r_hashed, k, k_hashed, leaf, index, root]
 
@@ -254,6 +262,12 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
             use halo2_proofs::dev::MockProver;
             // over kill k just for test purpose
             let prover = MockProver::run(20, &prover_circuit, vec![public.clone()]).unwrap();
+            // Generate the DOT graph string.
+            // let dot_string = halo2_proofs::dev::circuit_dot_graph(&prover_circuit);
+
+            // Now you can either handle it in Rust, or just
+            // print it out to use with command-line tools.
+            // print!("{}", dot_string);
             prover.assert_satisfied();
         }
 
@@ -276,12 +290,13 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
     fn eh_verify_halo(
         proof: &EHProof<LE, LM, LB>,
         set_commitment: &[u8; 32],
+        k: u32,
         param: &Params<EqAffine>,
         vk: &VerifyingKey<EqAffine>,
     ) -> Result<bool, String> {
         // verify the k commitment
 
-        let public = proof.create_instance(set_commitment);
+        let public = proof.create_instance(set_commitment, k);
 
         let membership = proof.get_membership();
         // compute bucket index
@@ -304,6 +319,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
 
         let empty_circuit =
             MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                vec![Value::unknown()],
                 vec![Value::unknown()],
                 vec![vec![Value::unknown(); 1]; LM],
                 vec![vec![Value::unknown(); 1]; LM],

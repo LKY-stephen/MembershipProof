@@ -18,6 +18,7 @@ pub(crate) fn get_bucket_index<const LE: usize>(
 
 pub(crate) fn get_keyed_hash<const LE: usize>(key: u32, element: &[u64; LE]) -> Fp {
     let mut rhs = element.to_vec();
+    // raw need 4 elements
     rhs.resize_with(4, || 0);
     poseidonhash(Fp::from(key as u64), Fp::from_raw(rhs.try_into().unwrap()))
 }
@@ -26,7 +27,7 @@ pub(crate) fn poseidonhash_node<const LE: usize>(node: &Node) -> Node {
     match node {
         Node::Raw((r, rhs)) => {
             let mut value = rhs.to_owned();
-            value.resize(LE, 0);
+            value.resize_with(LE, || 0);
             let hash = get_keyed_hash::<LE>(*r, &value.try_into().unwrap());
             Node::Field(hash)
         }
