@@ -9,7 +9,6 @@ use crate::{
 /// internal sturcture to test SC scheme
 pub struct Proof<const LE: usize, const LB: usize> {
     r: u32,
-    k: u32,
     left: Vec<Node>,
     right: Vec<Node>,
 }
@@ -17,14 +16,19 @@ pub struct Proof<const LE: usize, const LB: usize> {
 impl<const LE: usize, const LB: usize> Proof<LE, LB> {
     const BUCKET_SIZE: usize = 1 << LB;
 
-    pub fn new(r: u32, k: u32, left: Vec<Node>, right: Vec<Node>) -> Self {
-        Self { r, k, left, right }
+    pub fn new(r: u32, left: Vec<Node>, right: Vec<Node>) -> Self {
+        Self { r, left, right }
     }
 
-    pub fn verify(&self, element: &[u64; LE], set_commitment: &[u8; 32]) -> Result<bool, String> {
+    pub fn verify(
+        &self,
+        element: &[u64; LE],
+        set_commitment: &[u8; 32],
+        k: u32,
+    ) -> Result<bool, String> {
         let mut index = vec![];
         let n = self.left.len();
-        let bucket_pos = get_top_bits(self.k, element, n - LB);
+        let bucket_pos = get_top_bits(k, element, n - LB);
         let target = get_keyed_hash(self.r, element);
         let pos = (bucket_pos << LB) + get_bucket_index(element, self.r, Self::BUCKET_SIZE);
         for i in 0..n {
@@ -79,7 +83,6 @@ impl<const LE: usize, const LB: usize> Proof<LE, LB> {
 
 pub struct EHProof<const LE: usize, const LM: usize, const LB: usize> {
     r: u32,
-    k: u32,
     k_hashed: Fp,
     r_hashed: Fp,
     on_tree_point: Fp,
@@ -89,10 +92,9 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
     const BUCKET_MASK: usize = (1 << LB) - 1;
     pub const PUBLIC_SIZE: usize = LM + 6;
 
-    pub fn new(r: u32, k: u32, k_hashed: Fp, r_hashed: Fp, on_tree_point: Fp) -> Self {
+    pub fn new(r: u32, k_hashed: Fp, r_hashed: Fp, on_tree_point: Fp) -> Self {
         Self {
             r,
-            k,
             k_hashed,
             r_hashed,
             on_tree_point,
@@ -110,7 +112,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
 
     /// create the public vector for proof
     /// [r, rhashed, k, k_hashed, leaf, path, commit]
-    pub fn create_instance(&self, set_commitment: &[u8; 32]) -> Vec<Fp> {
+    pub fn create_instance(&self, set_commitment: &[u8; 32], k: u32) -> Vec<Fp> {
         let mut public = vec![Fp::from_repr(set_commitment.to_owned()).unwrap()];
 
         // the index of bucket
@@ -143,7 +145,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
         // push k, kpoint
         public.push(self.k_hashed);
 
-        public.push(Fp::from(self.k as u64));
+        public.push(Fp::from(k as u64));
 
         public.push(self.r_hashed);
 

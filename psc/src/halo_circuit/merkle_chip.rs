@@ -337,7 +337,7 @@ impl<F: PrimeField, const I: usize> MerkleExtendedPathInstruction<F, I>
                             cur_pos + 1,
                         )?;
                         hash[i][j].copy_advice(
-                            || "copy hash",
+                            || "assign hash",
                             &mut region,
                             config.value[j],
                             hash_pos,

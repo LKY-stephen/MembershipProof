@@ -10,7 +10,7 @@ use halo2_proofs::plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Inst
 #[derive(Clone)]
 pub struct MerkleExtendedConfig<
     F: PrimeField,
-    S: Spec<F, W, R> + Clone,
+    S: Spec<F, W, R> + Clone + Copy,
     const M: usize,
     const W: usize,
     const R: usize,
@@ -36,7 +36,8 @@ pub struct MerkleExtendedPathEHCircuit<
     const R: usize,
     const B: usize,
 > {
-    value: [Value<F>; 1],
+    queried: [Value<F>; 1],
+    leaf: [Value<F>; 1],
     left: Vec<[Value<F>; 1]>,
     right: Vec<[Value<F>; 1]>,
     copy: Vec<Value<F>>,
@@ -45,7 +46,7 @@ pub struct MerkleExtendedPathEHCircuit<
 
 impl<
         F: PrimeField,
-        S: Spec<F, W, R> + Clone,
+        S: Spec<F, W, R> + Clone + Copy,
         const M: usize,
         const W: usize,
         const R: usize,
@@ -58,7 +59,8 @@ impl<
 
     fn without_witnesses(&self) -> Self {
         Self {
-            value: [Value::unknown(); 1],
+            queried: [Value::unknown(); 1],
+            leaf: [Value::unknown(); 1],
             left: vec![[Value::unknown(); 1]; M + 1],
             right: vec![[Value::unknown(); 1]; M + 1],
             copy: vec![Value::unknown(); M + 1],
@@ -109,7 +111,36 @@ impl<
         config: MerkleExtendedConfig<F, S, M, W, R, B>,
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
-        let merkle_chip = MerkleExtendedPathChip::construct(config.merkle_config.clone());
+        // verify hash of queried for r
+        // public[1] = hash(r=public[0],queried);
+
+        Self::public_value_check(
+            &self.queried[0],
+            0,
+            1,
+            &config,
+            &mut layouter.namespace(|| "check queried with  r"),
+        )?;
+
+        // for k, verify public[3] = hash(k=public[2], queried);
+
+        Self::public_value_check(
+            &self.queried[0],
+            2,
+            3,
+            &config,
+            &mut layouter.namespace(|| "check queried with  k"),
+        )?;
+
+        // for r, verify public[4] = hash(r=public[0], leaf);
+
+        Self::public_value_check(
+            &self.leaf[0],
+            0,
+            4,
+            &config,
+            &mut layouter.namespace(|| "check leaf wit r"),
+        )?;
 
         // handle path
         let copy_len = M - self.left.len();
@@ -131,7 +162,6 @@ impl<
 
         // compute hash
         for row in 0..M {
-            let poseidon_chip = Pow5Chip::construct(config.pow5_config.clone());
             let (left, right) = layouter.assign_region(
                 || "load message",
                 |mut region| {
@@ -153,106 +183,15 @@ impl<
                 },
             )?;
             let message = vec![left.clone(), right.clone()];
-            let hasher = Hash::<_, _, S, ConstantLength<2>, W, R>::init(
-                poseidon_chip,
-                layouter.namespace(|| "init"),
-            )?;
 
-            let hash = hasher.hash(
-                layouter.namespace(|| "hash"),
-                message
-                    .try_into()
-                    .expect("incorrect length for poseidon inputs"),
-            )?;
+            let hash = Self::hash(message, &config, &mut layouter)?;
 
             left_nodes.push([left]);
             right_nodes.push([right]);
-            hash_nodes.push(
-                vec![hash]
-                    .try_into()
-                    .expect("incorrect length for poseidon left inputs"),
-            );
+            hash_nodes.push([hash]);
         }
 
-        let leaf_value = self.value;
-
-        // verify hash of r
-        let poseidon_chip = Pow5Chip::construct(config.pow5_config.clone());
-        let (leaf_value, r) = layouter.assign_region(
-            || "load for r",
-            |mut region| {
-                let r = region.assign_advice_from_instance(
-                    || format!("load r"),
-                    config.public,
-                    0,
-                    config.hash_input[0],
-                    0,
-                )?;
-                let value = region.assign_advice(
-                    || format!("load value "),
-                    config.hash_input[1],
-                    0,
-                    || leaf_value[0],
-                )?;
-
-                Ok((value, r))
-            },
-        )?;
-
-        let message = vec![r, leaf_value.clone()];
-        let hasher = Hash::<_, _, S, ConstantLength<2>, W, R>::init(
-            poseidon_chip,
-            layouter.namespace(|| "init"),
-        )?;
-
-        let hash = hasher.hash(
-            layouter.namespace(|| "hash"),
-            message
-                .try_into()
-                .expect("incorrect length for poseidon inputs"),
-        )?;
-
-        // public[1] = hash(r=public[0],value);
-        layouter.constrain_instance(hash.cell(), config.public, 1)?;
-
-        // for k, verify public[3] = hash(k=public[2], value);
-
-        let poseidon_chip = Pow5Chip::construct(config.pow5_config.clone());
-        let (value, k) = layouter.assign_region(
-            || "load for para",
-            |mut region| {
-                let value = leaf_value.clone().copy_advice(
-                    || format!("load value for k"),
-                    &mut region,
-                    config.hash_input[0],
-                    0,
-                )?;
-
-                let k = region.assign_advice_from_instance(
-                    || format!("load k node at row k"),
-                    config.public,
-                    2,
-                    config.hash_input[1],
-                    0,
-                )?;
-
-                Ok((value, k))
-            },
-        )?;
-        let message = vec![k, value];
-        let hasher = Hash::<_, _, S, ConstantLength<2>, W, R>::init(
-            poseidon_chip,
-            layouter.namespace(|| "init"),
-        )?;
-
-        let hash = hasher.hash(
-            layouter.namespace(|| "hash"),
-            message
-                .try_into()
-                .expect("incorrect length for poseidon inputs"),
-        )?;
-
-        layouter.constrain_instance(hash.cell(), config.public, 3)?;
+        let merkle_chip = MerkleExtendedPathChip::construct(config.merkle_config.clone());
 
         // load leave
         merkle_chip.load_leaves(
@@ -264,7 +203,7 @@ impl<
 
         // check root is correct
         layouter.constrain_instance(
-            hash_nodes.last().expect("no empty hash")[0].cell(),
+            hash_nodes.last().unwrap().to_owned()[0].cell(),
             config.public,
             M + 5,
         )?;
@@ -281,6 +220,7 @@ impl<
             B,
             6,
         )?;
+
         return Ok(());
     }
 }
@@ -300,7 +240,8 @@ impl<
     /// ...
     /// [root, root]
     pub fn new(
-        value: Vec<Value<F>>,
+        queried: Vec<Value<F>>,
+        leaf: Vec<Value<F>>,
         left: Vec<Vec<Value<F>>>,
         right: Vec<Vec<Value<F>>>,
         copy: Vec<Value<F>>,
@@ -308,7 +249,8 @@ impl<
         assert_eq!(left.len(), right.len());
         assert_eq!(copy.len(), M);
         MerkleExtendedPathEHCircuit {
-            value: value.try_into().expect("value inputs error"),
+            queried: queried.try_into().expect("value inputs error"),
+            leaf: leaf.try_into().expect("value inputs error"),
             left: left
                 .into_iter()
                 .map(|v| v.try_into().expect("left inputs error"))
@@ -320,5 +262,61 @@ impl<
             copy: copy,
             _marker: PhantomData,
         }
+    }
+
+    // check public[result] = hash(public[seed], element);
+    fn public_value_check(
+        element: &Value<F>,
+        seed_row: usize,
+        result_row: usize,
+        config: &MerkleExtendedConfig<F, S, M, W, R, B>,
+        layouter: &mut impl Layouter<F>,
+    ) -> Result<(), Error> {
+        let (value, seed) = layouter.assign_region(
+            || "load for seed",
+            |mut region| {
+                let seed = region.assign_advice_from_instance(
+                    || format!("load seed"),
+                    config.public,
+                    seed_row,
+                    config.hash_input[0],
+                    0,
+                )?;
+                let value = region.assign_advice(
+                    || format!("load value "),
+                    config.hash_input[1],
+                    0,
+                    || element.to_owned(),
+                )?;
+
+                Ok((value, seed))
+            },
+        )?;
+
+        let message = vec![seed, value.clone()];
+
+        let hash = Self::hash(message, config, layouter)?;
+
+        layouter.constrain_instance(hash.cell(), config.public, result_row)?;
+        Ok(())
+    }
+
+    fn hash(
+        message: Vec<AssignedCell<F, F>>,
+        config: &MerkleExtendedConfig<F, S, M, W, R, B>,
+        layouter: &mut impl Layouter<F>,
+    ) -> Result<AssignedCell<F, F>, Error> {
+        let poseidon_chip = Pow5Chip::construct(config.pow5_config.clone());
+        let hasher = Hash::<_, _, S, ConstantLength<2>, W, R>::init(
+            poseidon_chip,
+            layouter.namespace(|| "init"),
+        )?;
+
+        hasher.hash(
+            layouter.namespace(|| "hash"),
+            message
+                .try_into()
+                .expect("incorrect length for poseidon inputs"),
+        )
     }
 }
