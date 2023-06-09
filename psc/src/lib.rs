@@ -215,7 +215,6 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         };
 
         let mut proof = EHProof::new(
-            r,
             get_keyed_hash(self.k, element),
             get_keyed_hash(r, element),
             match leaf {
@@ -227,7 +226,8 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         let (left, right) = self.get_merkle_path(position);
 
         // create the value for queried element
-        let value = element.to_vec();
+        let mut value = element.to_vec();
+        value.resize(4, 0);
         let target = Value::known(Fp::from_raw(value.try_into().unwrap()));
 
         // create the circuit
@@ -235,6 +235,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
             MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
                 vec![target],
                 vec![leaf_value],
+                vec![Value::known(Fp::from(r as u64))],
                 left.into_iter()
                     .map(|x| match x {
                         Node::Field(f) => vec![Value::known(f)],
@@ -319,6 +320,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
 
         let empty_circuit =
             MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                vec![Value::unknown()],
                 vec![Value::unknown()],
                 vec![Value::unknown()],
                 vec![vec![Value::unknown(); 1]; LM],

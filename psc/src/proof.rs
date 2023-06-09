@@ -82,7 +82,6 @@ impl<const LE: usize, const LB: usize> Proof<LE, LB> {
 }
 
 pub struct EHProof<const LE: usize, const LM: usize, const LB: usize> {
-    r: u32,
     k_hashed: Fp,
     r_hashed: Fp,
     on_tree_point: Fp,
@@ -90,11 +89,10 @@ pub struct EHProof<const LE: usize, const LM: usize, const LB: usize> {
 }
 impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
     const BUCKET_MASK: usize = (1 << LB) - 1;
-    pub const PUBLIC_SIZE: usize = LM + 6;
+    pub const PUBLIC_SIZE: usize = LM + 5;
 
-    pub fn new(r: u32, k_hashed: Fp, r_hashed: Fp, on_tree_point: Fp) -> Self {
+    pub fn new(k_hashed: Fp, r_hashed: Fp, on_tree_point: Fp) -> Self {
         Self {
-            r,
             k_hashed,
             r_hashed,
             on_tree_point,
@@ -111,7 +109,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
     }
 
     /// create the public vector for proof
-    /// [r, rhashed, k, k_hashed, leaf, path, commit]
+    /// [k, k_hashed, rhashed, leaf, path, commit]
     pub fn create_instance(&self, set_commitment: &[u8; 32], k: u32) -> Vec<Fp> {
         let mut public = vec![Fp::from_repr(set_commitment.to_owned()).unwrap()];
 
@@ -142,14 +140,11 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
         // push leaf
         public.push(self.on_tree_point);
 
+        public.push(self.r_hashed);
         // push k, kpoint
         public.push(self.k_hashed);
 
         public.push(Fp::from(k as u64));
-
-        public.push(self.r_hashed);
-
-        public.push(Fp::from(self.r as u64));
 
         public.reverse();
 
@@ -162,6 +157,6 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHProof<LE, LM, LB> {
     }
 
     pub fn len(&self) -> usize {
-        8 + 3 * 32 + self.proof.len()
+        3 * 32 + self.proof.len()
     }
 }
