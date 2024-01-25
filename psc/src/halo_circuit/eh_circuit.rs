@@ -38,6 +38,7 @@ pub struct MerkleExtendedPathEHCircuit<
 > {
     queried: [Value<F>; 1],
     leaf: [Value<F>; 1],
+    rk: [Value<F>; 1],
     r: [Value<F>; 1],
     left: Vec<[Value<F>; 1]>,
     right: Vec<[Value<F>; 1]>,
@@ -62,6 +63,7 @@ impl<
         Self {
             queried: [Value::unknown(); 1],
             leaf: [Value::unknown(); 1],
+            rk: [Value::unknown(); 1],
             r: [Value::unknown(); 1],
             left: vec![[Value::unknown(); 1]; M + 1],
             right: vec![[Value::unknown(); 1]; M + 1],
@@ -114,7 +116,7 @@ impl<
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
         // verify hash of queried for r
-        // for k, verify public[3] = hash(k=public[2], queried);
+        // for k, verify public[1] = hash(k=public[0], queried);
 
         Self::spliting_check(
             &self.queried[0],
@@ -124,20 +126,22 @@ impl<
             &mut layouter.namespace(|| "check queried with  k"),
         )?;
 
-        // public[1] = hash(r=public[0],queried);
+        // public[1] = hash(rk,r,queried);
 
         Self::node_check(
             &self.queried[0],
+            &self.rk[0],
             &self.r[0],
             2,
             &config,
             &mut layouter.namespace(|| "check queried with  r"),
         )?;
 
-        // for r, verify public[4] = hash(r=public[0], leaf);
+        // for r, verify public[4] = hash(rk, r, leaf);
 
         Self::node_check(
             &self.leaf[0],
+            &self.rk[0],
             &self.r[0],
             3,
             &config,
@@ -244,6 +248,7 @@ impl<
     pub fn new(
         queried: Vec<Value<F>>,
         leaf: Vec<Value<F>>,
+        rk: Vec<Value<F>>,
         r: Vec<Value<F>>,
         left: Vec<Vec<Value<F>>>,
         right: Vec<Vec<Value<F>>>,
@@ -254,6 +259,7 @@ impl<
         MerkleExtendedPathEHCircuit {
             queried: queried.try_into().expect("value inputs error"),
             leaf: leaf.try_into().expect("value inputs error"),
+            rk: rk.try_into().expect("value inputs error"),
             r: r.try_into().expect("value inputs error"),
             left: left
                 .into_iter()
@@ -268,24 +274,43 @@ impl<
         }
     }
 
-    // check public[result] = hash(seed, element);
+    // check public[result] = hash(rk, seed, element);
     fn node_check(
         element: &Value<F>,
+        rk: &Value<F>,
         seed: &Value<F>,
         result_row: usize,
         config: &MerkleExtendedConfig<F, S, M, W, R, B>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
-        let (value, seed) = layouter.assign_region(
-            || "load for seed",
+        let (rk, r) = layouter.assign_region(
+            || "load for rk/r",
             |mut region| {
-                let seed = region.assign_advice(
+                let rk = region.assign_advice(
                     || format!("load value "),
                     config.hash_input[0],
                     0,
-                    || seed.to_owned(),
+                    || rk.to_owned(),
                 )?;
 
+                let r = region.assign_advice(
+                    || format!("load value "),
+                    config.hash_input[1],
+                    0,
+                    || seed.to_owned(),
+                )?;
+                Ok((rk, r))
+            },
+        )?;
+
+        let message = vec![rk, r];
+
+        let raw = Self::hash(message, config, layouter)?;
+        let (copied, value) = layouter.assign_region(
+            || "load for value",
+            |mut region| {
+                let copied =
+                    raw.copy_advice(|| "load raw", &mut region, config.hash_input[0], 0)?;
                 let value = region.assign_advice(
                     || format!("load value "),
                     config.hash_input[1],
@@ -293,13 +318,11 @@ impl<
                     || element.to_owned(),
                 )?;
 
-                Ok((value, seed))
+                Ok((copied, value))
             },
         )?;
 
-        let message = vec![seed, value.clone()];
-
-        let hash = Self::hash(message, config, layouter)?;
+        let hash = Self::hash(vec![copied, value.clone()], config, layouter)?;
 
         layouter.constrain_instance(hash.cell(), config.public, result_row)?;
         Ok(())
@@ -314,7 +337,7 @@ impl<
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
         let (value, seed) = layouter.assign_region(
-            || "load for seed",
+            || "load for k",
             |mut region| {
                 let seed = region.assign_advice_from_instance(
                     || format!("load seed"),
@@ -352,7 +375,6 @@ impl<
             poseidon_chip,
             layouter.namespace(|| "init"),
         )?;
-
         hasher.hash(
             layouter.namespace(|| "hash"),
             message
