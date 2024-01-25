@@ -15,21 +15,21 @@ fn bench_with_m(c: &mut Criterion) {
     let set = gen_rand_list::<LN>(10);
     let mut group = c.benchmark_group("with_changed_m");
 
-    bench_halo::<LN, 12, _>(&set, &mut group, |s: &str| {
-        BenchmarkId::new(&format!("{s} for n: 10 ",), 12)
-    });
+    // bench_halo::<LN, 12, _>(&set, &mut group, |s: &str| {
+    //     BenchmarkId::new(&format!("{s} for n: 10 ",), 12)
+    // });
     bench_halo::<LN, 16, _>(&set, &mut group, |s: &str| {
         BenchmarkId::new(&format!("{s} for n: 10 ",), 16)
     });
-    bench_halo::<LN, 32, _>(&set, &mut group, |s: &str| {
-        BenchmarkId::new(&format!("{s} for n: 10 ",), 32)
-    });
+    // bench_halo::<LN, 32, _>(&set, &mut group, |s: &str| {
+    //     BenchmarkId::new(&format!("{s} for n: 10 ",), 32)
+    // });
     bench_halo::<LN, 64, _>(&set, &mut group, |s: &str| {
         BenchmarkId::new(&format!("{s} for n: 10 ",), 64)
     });
-    bench_halo::<LN, 128, _>(&set, &mut group, |s: &str| {
-        BenchmarkId::new(&format!("{s} for n: 10 ",), 128)
-    });
+    // bench_halo::<LN, 128, _>(&set, &mut group, |s: &str| {
+    //     BenchmarkId::new(&format!("{s} for n: 10 ",), 128)
+    // });
     bench_halo::<LN, 256, _>(&set, &mut group, |s: &str| {
         BenchmarkId::new(&format!("{s} for n: 10 ",), 256)
     });
@@ -39,7 +39,7 @@ fn bench_with_m(c: &mut Criterion) {
 fn bench_with_n(c: &mut Criterion) {
     const LN: usize = 4;
     let mut group = c.benchmark_group("with_changed_n");
-    for n in [5, 10, 15, 20] {
+    for n in [10, 15, 20] {
         let set = gen_rand_list::<LN>(n);
         bench_halo::<LN, 32, _>(&set, &mut group, |s: &str| {
             BenchmarkId::new(&format!("{s} for m: 32 ",), n)
