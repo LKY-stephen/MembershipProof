@@ -36,7 +36,7 @@ pub(crate) fn poseidonhash_node<const LE: usize>(node: &Node) -> Node {
     match node {
         Node::Raw((rk, r, rhs)) => {
             let mut value = rhs.to_owned();
-            value.resize_with(LE, || 0);
+            value.resize_with(4, || 0);
             let raw: Fp = poseidonhash([Fp::from(*rk), Fp::from(*r as u64)]);
             let hash = poseidonhash([raw, Fp::from_raw(value.try_into().unwrap())]);
             Node::Field(hash)
