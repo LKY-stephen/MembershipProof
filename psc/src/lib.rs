@@ -35,6 +35,7 @@ pub struct Psc<const LE: usize, const LM: usize, const LB: usize> {
     aux: Vec<Vec<Node>>,
     set_commitment: [u8; 32],
     k: u32,
+    rk: u64,
 }
 
 impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
@@ -45,13 +46,10 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
             panic!("The size of the set is too large");
         }
 
+        let rk = rand::random::<u64>();
         let keys: Vec<[u64; LE]> = set
             .into_iter()
-            .map(|x| {
-                x.to_owned()
-                    .try_into()
-                    .expect("slice with incorrect length")
-            })
+            .map(|x| x.to_owned().map(|v| v.wrapping_add(rk)))
             .collect();
 
         // initate the vec k.
@@ -75,7 +73,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
 
         #[cfg(debug_assertions)]
         println!("Start maping for buckets");
-        let mut aux = vec![buckets.init_aux(Self::BUCKET_SIZE)];
+        let mut aux = vec![buckets.init_aux(Self::BUCKET_SIZE, rk)];
         let raw_leaves = aux.first().expect("empty leaves");
         aux.push(raw_leaves.iter().map(poseidonhash_node::<LE>).collect());
 
@@ -104,6 +102,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
                 aux,
                 set_commitment,
                 k,
+                rk,
             }
         } else {
             panic!("root is not a field element");
@@ -117,17 +116,16 @@ impl<const LE: usize, const LM: usize, const LB: usize> Psc<LE, LM, LB> {
     fn get_position_r(&self, element: &[u64; LE]) -> (usize, u32) {
         // n is depth of real tree
         let n = self.get_n();
-
         let bucket_position = get_top_bits(self.k, element, n) << LB;
 
         // fetch the first leaf of the bucket
         let bucket_leaf = &self.aux[0][bucket_position];
         let r = match bucket_leaf {
             Node::Field(_) => panic!("raw leaf should not be a filed"),
-            Node::Raw((r, _)) => r.to_owned(),
+            Node::Raw((_, r, _)) => r.to_owned(),
         };
         // fetch the real leaf
-        let position = bucket_position + get_bucket_index(element, r, Self::BUCKET_SIZE);
+        let position = bucket_position + get_bucket_index(element, self.rk, r, Self::BUCKET_SIZE);
 
         return (position, r);
     }
@@ -171,11 +169,14 @@ impl<const LE: usize, const LM: usize, const LB: usize> SetCommitment<LE, LM, LB
 
     fn prove(&self, element: &Self::Element) -> Proof<LE, LB> {
         // fetch the path
-        let (position, r) = self.get_position_r(element);
+
+        let shift = element.to_owned().map(|x| x.wrapping_add(self.rk));
+
+        let (position, r) = self.get_position_r(&shift);
 
         let (left, right) = self.get_merkle_path(position);
 
-        Proof::new(r, left, right)
+        Proof::new(self.rk, r, left, right)
     }
 
     fn verify_membership(
@@ -201,13 +202,15 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         const R: usize = W - 1;
 
         // n is depth of real tree
-
-        let (position, r) = self.get_position_r(element);
+        let shifted = element.to_owned().map(|x| x.wrapping_add(self.rk));
+        let (position, r) = self.get_position_r(&shifted);
 
         let leaf = self.aux[1][position].clone();
         let leaf_value = match &self.aux[0][position] {
             Node::Field(_) => panic!("raw leaf should not be a filed"),
-            Node::Raw((_, v)) => {
+            Node::Raw((rk_read, r_read, v)) => {
+                assert_eq!(self.rk, *rk_read);
+                assert_eq!(r, *r_read);
                 let mut value = v.to_owned();
                 value.resize(4, 0);
                 Value::known(Fp::from_raw(value.try_into().unwrap()))
@@ -215,8 +218,8 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         };
 
         let mut proof = EHProof::new(
-            get_keyed_hash(self.k, element),
-            get_keyed_hash(r, element),
+            get_split_hash(self.k, &shifted),
+            get_bucket_hash(self.rk, r, &shifted),
             match leaf {
                 Node::Field(f) => f,
                 Node::Raw(_) => panic!("leaf should be a filed element"),
@@ -226,7 +229,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
         let (left, right) = self.get_merkle_path(position);
 
         // create the value for queried element
-        let mut value = element.to_vec();
+        let mut value = shifted.to_vec();
         value.resize(4, 0);
         let target = Value::known(Fp::from_raw(value.try_into().unwrap()));
 
@@ -235,6 +238,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
             MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
                 vec![target],
                 vec![leaf_value],
+                vec![Value::known(Fp::from(self.rk as u64))],
                 vec![Value::known(Fp::from(r as u64))],
                 left.into_iter()
                     .map(|x| match x {
@@ -320,6 +324,7 @@ impl<const LE: usize, const LM: usize, const LB: usize> EHScheme<LE, LM, LB> for
 
         let empty_circuit =
             MerkleExtendedPathEHCircuit::<Fp, PoseidonSpec<W, R>, LM, W, R, LB>::new(
+                vec![Value::unknown()],
                 vec![Value::unknown()],
                 vec![Value::unknown()],
                 vec![Value::unknown()],

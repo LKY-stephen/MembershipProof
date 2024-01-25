@@ -6,7 +6,7 @@ use rand::prelude::*;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 #[derive(Clone)]
 pub enum Node {
-    Raw((u32, Vec<u64>)),
+    Raw((u64, u32, Vec<u64>)),
     Field(Fp),
 }
 pub(crate) struct Buckets<const LE: usize> {
@@ -73,7 +73,7 @@ impl<const LE: usize> Buckets<LE> {
         }
     }
 
-    pub(crate) fn init_aux(&self, bucket_size: usize) -> Vec<Node> {
+    pub(crate) fn init_aux(&self, bucket_size: usize, rk: u64) -> Vec<Node> {
         let max_set_size = self
             .buckets
             .iter()
@@ -92,12 +92,12 @@ impl<const LE: usize> Buckets<LE> {
                 // for simplicity, we use (r,r) for empty hole, which is not secure;
                 // should use other proper things with different hash instead;
                 if bucket.len() == 0 {
-                    return vec![Node::Raw((r, vec![r as u64])); bucket_size];
+                    return vec![Node::Raw((rk, r, vec![r as u64])); bucket_size];
                 }
                 while r < u32::MAX {
                     let index = bucket
                         .iter()
-                        .map(|x| (get_bucket_index(x, r, bucket_size), x))
+                        .map(|x| (get_bucket_index(x, rk, r, bucket_size), x))
                         .collect::<HashMap<_, _>>();
 
                     if index.len() != bucket.len() {
@@ -109,9 +109,9 @@ impl<const LE: usize> Buckets<LE> {
                     let mut result = vec![];
                     for i in 0..bucket_size {
                         if let Some(&x) = index.get(&i) {
-                            result.push(Node::Raw((r, x.to_vec())));
+                            result.push(Node::Raw((rk, r, x.to_vec())));
                         } else {
-                            result.push(Node::Raw((r, vec![r as u64])));
+                            result.push(Node::Raw((rk, r, vec![r as u64])));
                         }
                     }
                     return result;

@@ -3,11 +3,13 @@ use halo2_proofs::pasta::Fp;
 
 use crate::{
     buckets::Node,
-    hashes::{fp_mod, get_bucket_index, get_keyed_hash, get_top_bits, poseidon_merkle_hash},
+    get_bucket_hash,
+    hashes::{fp_mod, get_bucket_index, get_top_bits, poseidon_merkle_hash},
 };
 
 /// internal sturcture to test SC scheme
 pub struct Proof<const LE: usize, const LB: usize> {
+    rk: u64,
     r: u32,
     left: Vec<Node>,
     right: Vec<Node>,
@@ -16,8 +18,8 @@ pub struct Proof<const LE: usize, const LB: usize> {
 impl<const LE: usize, const LB: usize> Proof<LE, LB> {
     const BUCKET_SIZE: usize = 1 << LB;
 
-    pub fn new(r: u32, left: Vec<Node>, right: Vec<Node>) -> Self {
-        Self { r, left, right }
+    pub fn new(rk: u64, r: u32, left: Vec<Node>, right: Vec<Node>) -> Self {
+        Self { rk, r, left, right }
     }
 
     pub fn verify(
@@ -28,9 +30,11 @@ impl<const LE: usize, const LB: usize> Proof<LE, LB> {
     ) -> Result<bool, String> {
         let mut index = vec![];
         let n = self.left.len();
-        let bucket_pos = get_top_bits(k, element, n - LB);
-        let target = get_keyed_hash(self.r, element);
-        let pos = (bucket_pos << LB) + get_bucket_index(element, self.r, Self::BUCKET_SIZE);
+        let shifted = element.to_owned().map(|v| v.wrapping_add(self.rk));
+        let bucket_pos = get_top_bits(k, &shifted, n - LB);
+        let target = get_bucket_hash(self.rk, self.r, &shifted);
+        let pos =
+            (bucket_pos << LB) + get_bucket_index(&shifted, self.rk, self.r, Self::BUCKET_SIZE);
         for i in 0..n {
             index.push((pos >> i) & 1);
         }
@@ -46,7 +50,7 @@ impl<const LE: usize, const LB: usize> Proof<LE, LB> {
             Node::Field(ref fp) => *fp == target,
         };
 
-        // we fetch n-2  elements from the path exclude the root.
+        // we fetch n-2 elements from the path exclude the root.
         for i in 0..(n - 1) {
             current = poseidon_merkle_hash(&self.left[i], &self.right[i]);
             let next_layer = match index[i + 1] {
